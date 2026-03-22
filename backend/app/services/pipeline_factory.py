@@ -31,6 +31,12 @@ class PipelineFactory:
         elif strategy == "chapter":
             from backend.app.services.chunking.chapter import ChapterChunker
             return ChapterChunker(**kwargs)
+        elif strategy == "recursive":
+            from backend.app.services.chunking.recursive import RecursiveChunker
+            return RecursiveChunker(**kwargs)
+        elif strategy == "regex":
+            from backend.app.services.chunking.regex_chunker import RegexChunker
+            return RegexChunker(**kwargs)
         else:
             raise ValueError(f"Unknown chunking strategy: {strategy}")
 

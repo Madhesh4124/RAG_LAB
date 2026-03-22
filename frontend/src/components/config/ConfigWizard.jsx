@@ -34,10 +34,10 @@ export default function ConfigWizard({ onComplete }) {
       uploading={uploading}
       progress={uploadProgress}
     />,
-    <ChunkingStep    config={config.chunking}     onChange={updateChunking} />,
-    <EmbeddingStep   config={config.embedding}    onChange={updateEmbedding} />,
-    <VectorStoreStep config={config.vectorstore}  onChange={updateVectorstore} />,
-    <RetrievalStep   config={config.retrieval}    onChange={updateRetrieval} />,
+    <ChunkingStep    config={config.chunker}      onChange={updateChunking} />,
+<EmbeddingStep   config={config.embedder}     onChange={updateEmbedding} />,
+<VectorStoreStep config={config.vectorstore}  onChange={updateVectorstore} />,
+<RetrievalStep   config={config.retriever}    onChange={updateRetrieval} />,
   ];
 
   return (

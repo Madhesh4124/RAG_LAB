@@ -27,17 +27,16 @@ export function useDocument() {
   }, []);
 
   const fetchChunks = useCallback(async (docId, chunkingConfig) => {
-    setLoadingChunks(true);
-    try {
-      const { data } = await getChunks(docId, chunkingConfig);
-      setChunks(data);
-    } catch {
-      // TODO: remove mock once backend is live
-      setChunks(MOCK_CHUNKS);
-    } finally {
-      setLoadingChunks(false);
-    }
-  }, []);
+  setLoadingChunks(true);
+  try {
+    const { data } = await getChunks(docId, chunkingConfig);
+    setChunks(data);
+  } catch {
+    setChunks(MOCK_CHUNKS);
+  } finally {
+    setLoadingChunks(false);
+  }
+}, []);
 
   const clearDocument = () => { setDocument(null); setChunks([]); };
 

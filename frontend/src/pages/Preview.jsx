@@ -9,15 +9,16 @@ import { useNavigate } from "react-router-dom";
 
 export default function Preview() {
   const [params]   = useSearchParams();
-  const docId      = params.get("doc");
+  const docId    = params.get("doc");
+  const configId = params.get("config");
   const navigate   = useNavigate();
 
   const { chunks, loadingChunks, fetchChunks } = useDocument();
   const { config } = useConfig();
 
   useEffect(() => {
-    if (docId) fetchChunks(docId, config.chunking);
-  }, [docId]);
+  if (docId) fetchChunks(docId, configId);
+}, [docId, configId]);
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-8 space-y-4">

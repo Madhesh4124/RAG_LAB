@@ -5,10 +5,13 @@ import PresetSelector   from "./PresetSelector";
 import ChunkingStep     from "./ChunkingStep";
 import { EmbeddingStep, VectorStoreStep, RetrievalStep } from "./Steps";
 import { Button, StepIndicator } from "../common/index";
+import { useNavigate } from "react-router-dom";
+import { saveConfig } from "../../services/api";
 
 const STEP_LABELS = ["Upload", "Chunking", "Embedding", "Vector Store", "Retrieval"];
 
 export default function ConfigWizard({ onComplete }) {
+  const navigate = useNavigate();
   const {
     config, step, TOTAL_STEPS,
     updateChunking, updateEmbedding, updateVectorstore, updateRetrieval,
@@ -20,11 +23,20 @@ export default function ConfigWizard({ onComplete }) {
   const canAdvance = step === 0 ? !!document : true;
   const isLastStep = step === STEP_LABELS.length - 1;
 
-  const handleComplete = () => {
-    // TODO: POST config to /api/config, then navigate to /chat or /preview
-    console.log("Final config:", config, "doc:", document?.id);
-    onComplete?.({ config, documentId: document?.id });
-  };
+  const handleComplete = async () => {
+  try {
+    const { data } = await saveConfig({
+      document_id: document?.id,
+      name: "My Config",
+      config_json: config
+    });
+    navigate(`/preview?doc=${document?.id}&config=${data.id}`);
+  } catch (e) {
+    console.error(e);
+    // fallback without config
+    navigate(`/preview?doc=${document?.id}`);
+  }
+};
 
   const stepComponents = [
     <DocumentUpload

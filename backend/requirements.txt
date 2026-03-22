@@ -99,6 +99,9 @@ orjson==3.11.7
 ormsgpack==1.12.2
 overrides==7.7.0
 packaging==24.2
+pdfminer.six==20251230
+pdfplumber==0.11.9
+pillow==12.1.1
 pluggy==1.6.0
 posthog==7.9.12
 propcache==0.4.1
@@ -110,6 +113,8 @@ pydantic==2.12.5
 pydantic-settings==2.13.1
 pydantic_core==2.41.5
 Pygments==2.19.2
+PyPDF2==3.0.1
+pypdfium2==5.6.0
 PyPika==0.51.1
 pyproject_hooks==1.2.0
 pyreadline3==3.5.4

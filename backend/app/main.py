@@ -1,4 +1,5 @@
 import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -16,23 +17,24 @@ logger = logging.getLogger(__name__)
 logger.info("Initializing database tables...")
 Base.metadata.create_all(bind=engine)
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup event to notify users logging cleanly
+    logger.info("RAG Lab API is ready")
+    print("RAG Lab API is ready")  # explicit local console signal
+    yield
+
 # Create FastAPI app instance
-app = FastAPI(title="RAG Lab API")
+app = FastAPI(title="RAG Lab API", lifespan=lifespan)
 
 # Configure CORS Middleware allowing local frontend testing smoothly
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Startup event to notify users logging cleanly
-@app.on_event("startup")
-async def startup_event():
-    logger.info("RAG Lab API is ready")
-    print("RAG Lab API is ready")  # explicit local console signal
 
 # Register all API specific routers directly
 app.include_router(documents_router)
@@ -44,3 +46,7 @@ app.include_router(analysis_router)
 @app.get("/")
 def root():
     return {"status": "RAG Lab API backend is online"}
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}

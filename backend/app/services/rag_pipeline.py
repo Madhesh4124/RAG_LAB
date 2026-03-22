@@ -5,11 +5,15 @@ Orchestrates the chunking, embedding, and vector storage components
 into a single, unified workflow.
 """
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Optional
 
 from backend.app.services.chunking.base import BaseChunker, Chunk
 from backend.app.services.embedding.base import BaseEmbedder
 from backend.app.services.vectorstore.base import BaseVectorStore
+
+# Memory dependencies
+from app.services.memory.base import BaseMemory
+from app.utils.timing import PipelineTimer
 
 
 class RAGPipeline:
@@ -19,6 +23,7 @@ class RAGPipeline:
         chunker: The strategy to use for document chunking.
         embedder: The strategy to use for vectorizing chunks and queries.
         vectorstore: The storage strategy for indexing and retrieving chunks.
+        memory: Optional memory module ensuring persistent conversation recall bounds natively.
     """
 
     def __init__(
@@ -26,52 +31,80 @@ class RAGPipeline:
         chunker: BaseChunker,
         embedder: BaseEmbedder,
         vectorstore: BaseVectorStore,
+        memory: Optional[BaseMemory] = None,
     ) -> None:
         self.chunker = chunker
         self.embedder = embedder
         self.vectorstore = vectorstore
+        self.memory = memory
+        self.timer = PipelineTimer()
 
     def index_document(self, text: str, doc_id: str, metadata: dict) -> None:
         """Processes a document and indexes it into the vector store.
-
-        Args:
-            text: The full textual content of the document.
-            doc_id: A unique identifier for the document.
-            metadata: Additional metadata to associate with the chunks.
         """
-        # Ensure doc_id is available in the metadata so it stays connected to the chunks
+        self.timer.reset()
+        
         enriched_metadata = metadata.copy() if metadata else {}
         enriched_metadata["doc_id"] = doc_id
 
-        # 1. Chunk the document
+        # 1. Chunk the document (Timed)
+        self.timer.start("chunking_time_ms")
         chunks = self.chunker.chunk(text=text, metadata=enriched_metadata)
+        self.timer.stop("chunking_time_ms")
 
-        # 2. Embed and store the chunks
+        # 2. Embed and store the chunks (Timed)
+        self.timer.start("embedding_time_ms")
         self.vectorstore.add_chunks(chunks=chunks, embedder=self.embedder)
+        self.timer.stop("embedding_time_ms")
 
     def retrieve(self, query: str, top_k: int = 5) -> List[Tuple[Chunk, float]]:
         """Retrieves chunks similar to the query.
-
-        Args:
-            query: The search query string.
-            top_k: The maximum number of results to fetch.
-
-        Returns:
-            A list of tuples, each containing a Chunk and a syntactic similarity score.
         """
-        return self.vectorstore.search(
+        # Time the active vector retrieval separately
+        self.timer.start("retrieval_time_ms")
+        results = self.vectorstore.search(
             query=query, embedder=self.embedder, top_k=top_k
         )
+        self.timer.stop("retrieval_time_ms")
+        return results
+
+    def generate(self, query: str, chunks: List[Any], llm=None) -> str:
+        """Generation bridge wrapping contexts dynamically before pinging any LLM native interfaces."""
+        self.timer.start("llm_time_ms")
+        
+        # Inject multi-turn memory interactions conditionally seamlessly as requested
+        prompt = ""
+        if self.memory:
+            past_context = self.memory.get_context()
+            if past_context:
+                prompt += f"System: Consider this historical context:\n{past_context}\n\n"
+        
+        prompt += f"User Query: {query}\n"
+        prompt += f"Context Documents: {len(chunks)} fragments indexed.\n"
+        
+        # Simulated LLM generation execution (expand natively dynamically)
+        answer = f"Simulated Response to Query: [{query}] mapped using attached memory."
+        
+        # Keep sliding memory actively aware of the outbound reply context natively
+        if self.memory:
+            self.memory.add_interaction(query, answer)
+            
+        self.timer.stop("llm_time_ms")
+        return answer
+        
+    def get_last_timings(self) -> Dict[str, float]:
+        """Returns the PipelineTimer's latest metrics dict spanning strictly active pipeline schema domains natively."""
+        return self.timer.to_metrics_dict()
 
     def get_config(self) -> Dict[str, Any]:
         """Returns the fully assembled pipeline configuration.
-
-        Returns:
-            A dictionary containing the individual configurations of the
-            chunker, embedder, and vectorstore.
         """
-        return {
+        config = {
             "chunker": self.chunker.get_config(),
             "embedder": self.embedder.get_config(),
             "vectorstore": self.vectorstore.get_config(),
         }
+        if self.memory:
+            config["memory"] = self.memory.get_config() if hasattr(self.memory, "get_config") else "custom_memory"
+            
+        return config

@@ -3,8 +3,8 @@
 from typing import Any, Dict, List, Tuple
 from rank_bm25 import BM25Okapi
 
-from backend.app.services.chunking.base import Chunk
-from backend.app.services.retrieval.base import BaseRetriever
+from app.services.chunking.base import Chunk
+from app.services.retrieval.base import BaseRetriever
 
 class BM25Retriever(BaseRetriever):
     """BM25 sparse retriever."""
@@ -12,11 +12,18 @@ class BM25Retriever(BaseRetriever):
     def __init__(self, chunks: List[Chunk]):
         self.chunks = chunks
         
+        if not self.chunks:
+            self.bm25 = None
+            return
+            
         # Tokenize by splitting on whitespace
         tokenized_corpus = [chunk.text.split() for chunk in self.chunks]
         self.bm25 = BM25Okapi(tokenized_corpus)
 
     def search(self, query: str, top_k: int) -> List[Tuple[Chunk, float]]:
+        if not self.chunks or self.bm25 is None:
+            return []
+            
         tokenized_query = query.split()
         scores = self.bm25.get_scores(tokenized_query)
         

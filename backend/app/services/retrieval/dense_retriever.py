@@ -2,10 +2,10 @@
 
 from typing import Any, Dict, List, Tuple
 
-from backend.app.services.chunking.base import Chunk
-from backend.app.services.embedding.base import BaseEmbedder
-from backend.app.services.vectorstore.base import BaseVectorStore
-from backend.app.services.retrieval.base import BaseRetriever
+from app.services.chunking.base import Chunk
+from app.services.embedding.base import BaseEmbedder
+from app.services.vectorstore.base import BaseVectorStore
+from app.services.retrieval.base import BaseRetriever
 
 class DenseRetriever(BaseRetriever):
     """Dense retriever using a vector store and embedder."""

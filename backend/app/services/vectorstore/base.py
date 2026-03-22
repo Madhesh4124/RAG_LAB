@@ -8,8 +8,8 @@ vector store implementations must follow.
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Tuple
 
-from backend.app.services.chunking.base import Chunk
-from backend.app.services.embedding.base import BaseEmbedder
+from app.services.chunking.base import Chunk
+from app.services.embedding.base import BaseEmbedder
 
 
 class BaseVectorStore(ABC):

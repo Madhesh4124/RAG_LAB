@@ -1,6 +1,6 @@
 import re
 from typing import Any, Dict, List
-from backend.app.services.chunking.base import BaseChunker, Chunk
+from app.services.chunking.base import BaseChunker, Chunk
 
 class RegexChunker(BaseChunker):
     """

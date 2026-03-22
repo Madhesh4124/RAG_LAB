@@ -5,7 +5,7 @@ from typing import Any, Dict, List
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-from backend.app.services.chunking.base import Chunk
+from app.services.chunking.base import Chunk
 
 load_dotenv()
 

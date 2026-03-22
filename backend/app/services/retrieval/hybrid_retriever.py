@@ -2,10 +2,10 @@
 
 from typing import Any, Dict, List, Tuple
 
-from backend.app.services.chunking.base import Chunk
-from backend.app.services.retrieval.base import BaseRetriever
-from backend.app.services.retrieval.dense_retriever import DenseRetriever
-from backend.app.services.retrieval.sparse_retriever import BM25Retriever
+from app.services.chunking.base import Chunk
+from app.services.retrieval.base import BaseRetriever
+from app.services.retrieval.dense_retriever import DenseRetriever
+from app.services.retrieval.sparse_retriever import BM25Retriever
 
 class HybridRetriever(BaseRetriever):
     """Hybrid Retriever running dense and sparse retrieval and merging them."""
@@ -17,6 +17,11 @@ class HybridRetriever(BaseRetriever):
 
     def search(self, query: str, top_k: int) -> List[Tuple[Chunk, float]]:
         dense_results = self.dense_retriever.search(query, top_k)
+        
+        # Only use sparse if it has chunks indexed
+        if len(self.sparse_retriever.chunks) == 0:
+            return dense_results
+            
         sparse_results = self.sparse_retriever.search(query, top_k)
 
         # Build dictionaries for fast lookup by chunk ID

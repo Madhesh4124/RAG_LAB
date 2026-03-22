@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Tuple
 
-from backend.app.services.chunking.base import Chunk
+from app.services.chunking.base import Chunk
 
 class BaseRetriever(ABC):
     """Abstract base class for all retrievers."""

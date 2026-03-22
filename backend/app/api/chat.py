@@ -18,7 +18,7 @@ def chat_endpoint(
     config_id: uuid.UUID = Body(...),
     db: Session = Depends(get_db)
 ):
-    from app.services.pipeline import PipelineFactory
+    from app.services.pipeline_factory import PipelineFactory
 
     doc = db.get(Document, doc_id)
     config = db.get(RAGConfig, config_id)
@@ -32,34 +32,53 @@ def chat_endpoint(
     
     try:
         timer.start("pipeline_build")
-        pipeline = PipelineFactory.build(config.config_json)
+        pipeline = PipelineFactory.create_pipeline(config.config_json)
         timer.stop("pipeline_build")
 
+        timer.start("chunking")
+        pipeline.index_document(
+            text=doc.content,
+            doc_id=str(doc_id),
+            metadata={"filename": doc.filename, "file_type": doc.file_type}
+        )
+        timer.stop("chunking")
+
         timer.start("retrieval")
-        # Ensure your pipeline.retrieve evaluates strings against the active DB chunks (not handled here natively)
-        retrieved_chunks_objs = pipeline.retrieve(query) 
+        retrieved_results = pipeline.retrieve(query)
         timer.stop("retrieval")
         
+        if retrieved_results and isinstance(retrieved_results[0], tuple):
+            retrieved_chunks_only = [res[0] for res in retrieved_results]
+        else:
+            retrieved_chunks_only = retrieved_results
+            
         timer.start("generation")
-        answer = pipeline.generate(query, retrieved_chunks_objs)
+        answer = pipeline.generate(query, retrieved_chunks_only)
         timer.stop("generation")
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    # Parse chunk entities to store them safely as JSON
-    retrieved_chunks = [
-        {
-            "id": str(getattr(c, "id", i)), 
-            "text": getattr(c, "text", str(c)), 
-            "score": getattr(c, "score", 0.0)
-        } 
-        for i, c in enumerate(retrieved_chunks_objs)
-    ]
+    retrieved_chunks = []
+    if 'retrieved_results' in locals():
+        for i, res in enumerate(retrieved_results):
+            if isinstance(res, tuple) and len(res) == 2:
+                chunk, score = res
+                retrieved_chunks.append({
+                    "id": str(getattr(chunk, "id", i)), 
+                    "text": getattr(chunk, "text", str(chunk)), 
+                    "score": float(score)
+                })
+            else:
+                chunk = res
+                retrieved_chunks.append({
+                    "id": str(getattr(chunk, "id", i)), 
+                    "text": getattr(chunk, "text", str(chunk)), 
+                    "score": float(getattr(chunk, "score", 0.0))
+                })
 
-    timings = timer.get_timings()
+    timings = timer.to_metrics_dict() if hasattr(timer, "to_metrics_dict") else timer.get_timings()
 
-    # Save user message
     user_msg = ChatMessage(
         document_id=doc_id,
         config_id=config_id,
@@ -69,7 +88,6 @@ def chat_endpoint(
     )
     db.add(user_msg)
     
-    # Save assistant response
     assistant_msg = ChatMessage(
         document_id=doc_id,
         config_id=config_id,

@@ -9,7 +9,7 @@ import re
 import uuid
 from typing import Any, Dict, List, Pattern
 
-from backend.app.services.chunking.base import BaseChunker, Chunk
+from app.services.chunking.base import BaseChunker, Chunk
 
 # Default heading patterns (case-insensitive, matched at line start):
 #   • "Chapter 1", "Chapter IV", "Chapter One" …

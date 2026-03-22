@@ -11,7 +11,7 @@ from typing import Any, Dict, List
 from dotenv import load_dotenv
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
-from backend.app.services.embedding.base import BaseEmbedder
+from app.services.embedding.base import BaseEmbedder
 
 load_dotenv()
 

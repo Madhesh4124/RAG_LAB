@@ -10,7 +10,7 @@ import re
 import uuid
 from typing import Any, Dict, List
 
-from backend.app.services.chunking.base import BaseChunker, Chunk
+from app.services.chunking.base import BaseChunker, Chunk
 
 # Regex that splits on sentence-ending punctuation (.!?) followed by
 # whitespace, or on newline characters — while keeping the delimiter

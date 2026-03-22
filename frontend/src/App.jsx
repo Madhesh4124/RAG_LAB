@@ -15,18 +15,22 @@ function Nav() {
     </nav>
   );
 }
-
 export default function App() {
   return (
     <BrowserRouter>
       <div className="min-h-screen bg-gray-50">
         <Nav />
-        <Routes>
-          <Route path="/"        element={<Setup />} />
-          <Route path="/setup"   element={<Setup />} />
-          <Route path="/preview" element={<Preview />} />
-          <Route path="/compare" element={<Compare />} />
-        </Routes>
+       <Routes>
+  <Route path="/"        element={<Setup />} />
+  <Route path="/setup"   element={<Setup />} />
+  <Route path="/preview" element={<Preview />} />
+  <Route path="/compare" element={<Compare />} />
+  <Route path="/chat"    element={
+    <div className="flex items-center justify-center h-96 text-gray-400">
+      <p>Chat coming in Phase 6 🚧</p>
+    </div>
+  } />
+  </Routes>
       </div>
     </BrowserRouter>
   );

@@ -1,6 +1,6 @@
 import axios from "axios";
 
-const BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const BASE = import.meta.env.VITE_API_URL || "http://localhost:8003";
 
 const api = axios.create({ baseURL: BASE });
 
@@ -13,7 +13,14 @@ export const uploadDocument = (formData, onProgress) =>
   });
 
 export const getChunks = (docId, config) =>
-  api.get(`/api/documents/${docId}/chunks`, { params: config });
+  api.get(`/api/documents/${docId}/chunks`, { 
+    params: { 
+      chunk_size: config?.chunk_size || 512,
+      overlap: config?.overlap || 50,
+      config_id: configId,
+      strategy: config?.type || "fixed_size"
+    } 
+  });
 
 // ── Config ──────────────────────────────────────────────────────
 export const saveConfig  = (cfg)      => api.post("/api/config", cfg);

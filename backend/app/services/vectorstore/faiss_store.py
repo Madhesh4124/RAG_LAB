@@ -10,9 +10,9 @@ from typing import Any, Dict, List, Tuple
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
 
-from backend.app.services.chunking.base import Chunk
-from backend.app.services.embedding.base import BaseEmbedder
-from backend.app.services.vectorstore.base import BaseVectorStore
+from app.services.chunking.base import Chunk
+from app.services.embedding.base import BaseEmbedder
+from app.services.vectorstore.base import BaseVectorStore
 
 
 class _EmbedderAdapter:

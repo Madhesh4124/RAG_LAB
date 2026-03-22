@@ -11,7 +11,7 @@ from typing import Any, Dict, List
 from dotenv import load_dotenv
 from langchain_nvidia_ai_endpoints import NVIDIAEmbeddings
 
-from backend.app.services.embedding.base import BaseEmbedder
+from app.services.embedding.base import BaseEmbedder
 
 load_dotenv()
 

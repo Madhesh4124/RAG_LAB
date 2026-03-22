@@ -79,6 +79,39 @@ class PipelineFactory:
             raise ValueError(f"Unknown vectorstore strategy: {strategy}")
 
     @staticmethod
+    def create_retriever(config: Dict[str, Any], vectorstore: BaseVectorStore, embedder: BaseEmbedder) -> Any:
+        """Create a retriever dynamically based on the configuration."""
+        retriever_cfg = config.get("retriever")
+        if not retriever_cfg:
+            return None
+            
+        type_ = retriever_cfg.get("type")
+        
+        if type_ == "hybrid":
+            from backend.app.services.retrieval.dense_retriever import DenseRetriever
+            from backend.app.services.retrieval.sparse_retriever import BM25Retriever
+            from backend.app.services.retrieval.hybrid_retriever import HybridRetriever
+            dr = DenseRetriever(vectorstore, embedder)
+            
+            # chunks can be loaded or passed from config
+            chunks = retriever_cfg.get("chunks", [])
+            sr = BM25Retriever(chunks)
+            alpha = retriever_cfg.get("alpha", 0.7)
+            return HybridRetriever(dense_retriever=dr, sparse_retriever=sr, alpha=alpha)
+            
+        elif type_ == "dense":
+            from backend.app.services.retrieval.dense_retriever import DenseRetriever
+            return DenseRetriever(vectorstore, embedder)
+            
+        elif type_ == "sparse":
+            from backend.app.services.retrieval.sparse_retriever import BM25Retriever
+            chunks = retriever_cfg.get("chunks", [])
+            return BM25Retriever(chunks)
+            
+        else:
+            return None
+
+    @staticmethod
     def create_pipeline(config: Dict[str, Any]) -> RAGPipeline:
         """Assemble a complete RAG pipeline from a nested configuration.
 
@@ -97,8 +130,11 @@ class PipelineFactory:
         embedder = PipelineFactory.create_embedder(embedder_cfg)
         vectorstore = PipelineFactory.create_vectorstore(vectorstore_cfg)
 
+        retriever = PipelineFactory.create_retriever(config, vectorstore, embedder)
+
         return RAGPipeline(
             chunker=chunker,
             embedder=embedder,
-            vectorstore=vectorstore
+            vectorstore=vectorstore,
+            retriever=retriever
         )

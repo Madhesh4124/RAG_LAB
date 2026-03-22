@@ -2,9 +2,9 @@
 import { Card } from "../common/index";
 
 const MODELS = [
-  { key: "nomic",  label: "Nomic Embed",  icon: "🦙", provider: "Ollama (local)",  dims: 768,  note: "Free, runs locally, fast" },
-  { key: "mxbai",  label: "MXBai Embed", icon: "🦙", provider: "Ollama (local)",  dims: 1024, note: "Higher quality than Nomic, still local" },
-  { key: "openai", label: "OpenAI Ada",   icon: "🌐", provider: "OpenAI (cloud)", dims: 1536, note: "Best quality — needs API key + costs money" },
+  { key: "google",      label: "Google Gemini", icon: "🌐", provider: "Google",  note: "gemini-embedding-2-preview. Default choice." },
+  { key: "nvidia",      label: "Nvidia",        icon: "⚡", provider: "Nvidia",  note: "High performance embeddings." },
+  { key: "huggingface", label: "HuggingFace",   icon: "🤗", provider: "HF API", note: "Open source models." },
 ];
 
 export function EmbeddingStep({ config, onChange }) {
@@ -20,7 +20,6 @@ export function EmbeddingStep({ config, onChange }) {
             <div className="text-2xl mb-1">{m.icon}</div>
             <p className="font-semibold text-sm text-gray-800">{m.label}</p>
             <p className="text-xs text-gray-400 mt-0.5">{m.provider}</p>
-            <p className="text-xs text-blue-600 font-mono mt-1">{m.dims} dims</p>
             <p className="text-xs text-gray-500 mt-2">{m.note}</p>
           </Card>
         ))}

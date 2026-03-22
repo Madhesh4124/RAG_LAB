@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Tuple, Optional
 from backend.app.services.chunking.base import BaseChunker, Chunk
 from backend.app.services.embedding.base import BaseEmbedder
 from backend.app.services.vectorstore.base import BaseVectorStore
+from backend.app.services.retrieval.base import BaseRetriever
 
 # Memory dependencies
 from app.services.memory.base import BaseMemory
@@ -32,11 +33,13 @@ class RAGPipeline:
         embedder: BaseEmbedder,
         vectorstore: BaseVectorStore,
         memory: Optional[BaseMemory] = None,
+        retriever: Optional[BaseRetriever] = None,
     ) -> None:
         self.chunker = chunker
         self.embedder = embedder
         self.vectorstore = vectorstore
         self.memory = memory
+        self.retriever = retriever
         self.timer = PipelineTimer()
 
     def index_document(self, text: str, doc_id: str, metadata: dict) -> None:
@@ -62,9 +65,14 @@ class RAGPipeline:
         """
         # Time the active vector retrieval separately
         self.timer.start("retrieval_time_ms")
-        results = self.vectorstore.search(
-            query=query, embedder=self.embedder, top_k=top_k
-        )
+        
+        if self.retriever:
+            results = self.retriever.search(query=query, top_k=top_k)
+        else:
+            results = self.vectorstore.search(
+                query=query, embedder=self.embedder, top_k=top_k
+            )
+            
         self.timer.stop("retrieval_time_ms")
         return results
 
@@ -106,5 +114,7 @@ class RAGPipeline:
         }
         if self.memory:
             config["memory"] = self.memory.get_config() if hasattr(self.memory, "get_config") else "custom_memory"
+        if self.retriever:
+            config["retriever"] = self.retriever.get_config() if hasattr(self.retriever, "get_config") else "custom_retriever"
             
         return config

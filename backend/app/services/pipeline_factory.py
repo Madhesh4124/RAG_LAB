@@ -112,6 +112,22 @@ class PipelineFactory:
             return None
 
     @staticmethod
+    def create_llm_client(config: Dict[str, Any]) -> Any:
+        """Create an LLM client dynamically based on the configuration."""
+        llm_cfg = config.get("llm")
+        if not llm_cfg:
+            return None
+            
+        provider = llm_cfg.get("provider")
+        if provider == "gemini":
+            from backend.app.services.llm.gemini_client import GeminiClient
+            model = llm_cfg.get("model", "gemini-2.5-flash")
+            temperature = llm_cfg.get("temperature", 0.2)
+            return GeminiClient(model=model, temperature=temperature)
+            
+        return None
+
+    @staticmethod
     def create_pipeline(config: Dict[str, Any]) -> RAGPipeline:
         """Assemble a complete RAG pipeline from a nested configuration.
 
@@ -131,10 +147,12 @@ class PipelineFactory:
         vectorstore = PipelineFactory.create_vectorstore(vectorstore_cfg)
 
         retriever = PipelineFactory.create_retriever(config, vectorstore, embedder)
+        llm_client = PipelineFactory.create_llm_client(config)
 
         return RAGPipeline(
             chunker=chunker,
             embedder=embedder,
             vectorstore=vectorstore,
-            retriever=retriever
+            retriever=retriever,
+            llm_client=llm_client
         )

@@ -40,12 +40,9 @@ class GoogleEmbedder(BaseEmbedder):
                 "Please add 'GOOGLE_API_KEY=your_key' to your .env file."
             )
 
-        # 2. Clear GEMINI_API_KEY from the environment if it exists 
-        # This prevents the "Both keys are set" warning from the underlying SDK
-        if "GEMINI_API_KEY" in os.environ:
-            del os.environ["GEMINI_API_KEY"]
-
-        # 3. Initialize the embeddings with the explicit key
+        # Initialize embeddings with explicit GOOGLE_API_KEY.
+        # Do not mutate GEMINI_API_KEY because the same process may
+        # also initialize an LLM client in the same request.
         self._embeddings = GoogleGenerativeAIEmbeddings(
             model=self.model,
             google_api_key=api_key,

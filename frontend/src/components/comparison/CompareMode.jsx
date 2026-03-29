@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { compareConfigs, MOCK_COMPARE_RESULTS } from "../../services/api";
+import { MOCK_COMPARE_RESULTS } from "../../services/api";
 import ConfigCard from "./ConfigCard";
 import { Button, Spinner } from "../common/index";
 
@@ -12,10 +12,7 @@ export default function CompareMode({ documentId }) {
     if (!query.trim()) return;
     setLoading(true);
     try {
-      // TODO: replace MOCK with real API call:
-      // const { data } = await compareConfigs({ query, document_id: documentId });
-      // setResults(data);
-      await new Promise((r) => setTimeout(r, 1200)); // simulate latency
+      await new Promise((r) => setTimeout(r, 1200));
       setResults(MOCK_COMPARE_RESULTS);
     } catch (e) {
       console.error(e);
@@ -26,16 +23,13 @@ export default function CompareMode({ documentId }) {
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-8 space-y-6">
-
-      {/* Header */}
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Compare Mode</h1>
         <p className="text-gray-400 text-sm mt-1">
-          Run the same query across multiple configurations and compare answers side-by-side.
+          Run the same query across multiple configurations side-by-side.
         </p>
       </div>
 
-      {/* Query input */}
       <div className="flex gap-3">
         <input
           type="text"
@@ -50,16 +44,12 @@ export default function CompareMode({ documentId }) {
         </Button>
       </div>
 
-      {/* Normalization note */}
       <div className="rounded-lg bg-amber-50 border border-amber-200 px-4 py-2 text-xs text-amber-700">
-        <span className="font-semibold">🔒 Controlled variables:</span> Same LLM model, temperature, max context length, and similarity threshold across all configs.
-        Only <span className="font-semibold">chunking strategy, embedding model, and top-k</span> vary.
+        <span className="font-semibold">🔒 Controlled variables:</span> Same LLM, temperature, max context. Only chunking strategy, embedding model, and top-k vary.
       </div>
 
-      {/* Loading */}
       {loading && <Spinner label="Running pipeline across all configurations…" />}
 
-      {/* Results grid */}
       {results && !loading && (
         <>
           <div className="grid gap-4 md:grid-cols-3">
@@ -67,23 +57,19 @@ export default function CompareMode({ documentId }) {
               <ConfigCard key={result.configId} result={result} />
             ))}
           </div>
-
-          {/* Metrics comparison table */}
           <MetricsTable results={results} />
         </>
       )}
-
     </div>
   );
 }
 
-// ── Metrics comparison table ──────────────────────────────────────
 function MetricsTable({ results }) {
   const metrics = [
-    { key: "response_time_ms", label: "Response Time",    format: (v) => `${v}ms`,  best: "min" },
-    { key: "chunks_retrieved", label: "Chunks Retrieved", format: (v) => v,          best: null  },
-    { key: "avg_similarity",   label: "Avg Similarity",   format: (v) => v.toFixed(2), best: "max" },
-    { key: "token_count",      label: "Tokens Used",      format: (v) => v,          best: "min" },
+    { key: "response_time_ms", label: "Response Time",    format: (v) => `${v}ms`,     best: "min" },
+    { key: "chunks_retrieved", label: "Chunks Retrieved", format: (v) => v,             best: null  },
+    { key: "avg_similarity",   label: "Avg Similarity",   format: (v) => v.toFixed(2),  best: "max" },
+    { key: "token_count",      label: "Tokens Used",      format: (v) => v,             best: "min" },
   ];
 
   return (
@@ -91,9 +77,9 @@ function MetricsTable({ results }) {
       <table className="w-full text-sm">
         <thead className="bg-gray-50">
           <tr>
-            <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Metric</th>
+            <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Metric</th>
             {results.map((r) => (
-              <th key={r.configId} className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">
+              <th key={r.configId} className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">
                 {r.configName}
               </th>
             ))}

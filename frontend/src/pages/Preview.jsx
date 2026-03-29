@@ -31,7 +31,7 @@ export default function Preview() {
         </div>
         <div className="flex gap-2">
           <Button variant="secondary" onClick={() => navigate("/setup")}>← Reconfigure</Button>
-          <Button onClick={() => navigate(`/chat?doc=${docId}`)}>Start Chatting →</Button>
+          <Button onClick={() => navigate(`/compare?doc=${docId}`)}>Try Compare Mode →</Button>
         </div>
       </div>
 

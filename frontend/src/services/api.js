@@ -12,14 +12,9 @@ export const uploadDocument = (formData, onProgress) =>
       onProgress?.(Math.round((e.loaded * 100) / e.total)),
   });
 
-export const getChunks = (docId, config) =>
-  api.get(`/api/documents/${docId}/chunks`, { 
-    params: { 
-      chunk_size: config?.chunk_size || 512,
-      overlap: config?.overlap || 50,
-      config_id: configId,
-      strategy: config?.type || "fixed_size"
-    } 
+export const getChunks = (docId, configId) =>
+  api.get(`/api/documents/${docId}/chunks`, {
+    params: configId ? { config_id: configId } : {}
   });
 
 // ── Config ──────────────────────────────────────────────────────

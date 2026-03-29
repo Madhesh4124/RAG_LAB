@@ -26,13 +26,14 @@ export function useDocument() {
     }
   }, []);
 
-  const fetchChunks = useCallback(async (docId, chunkingConfig) => {
+  const fetchChunks = useCallback(async (docId, configId) => {
   setLoadingChunks(true);
   try {
-    const { data } = await getChunks(docId, chunkingConfig);
+    const { data } = await getChunks(docId, configId);
     setChunks(data);
-  } catch {
-    setChunks(MOCK_CHUNKS);
+  } catch (e) {
+    console.error(e);
+    setChunks(MOCK_CHUNKS); // fallback to mock
   } finally {
     setLoadingChunks(false);
   }

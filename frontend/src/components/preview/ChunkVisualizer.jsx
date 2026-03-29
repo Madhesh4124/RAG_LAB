@@ -12,7 +12,10 @@ const CHUNK_COLORS = [
 export default function ChunkVisualizer({ chunks = [], loading }) {
   const [selectedId, setSelectedId] = useState(null);
 
-  const selected = chunks.find((c) => c.id === selectedId);
+  // handle different response shapes from backend
+  const chunkList = Array.isArray(chunks) ? chunks : chunks?.chunks || chunks?.data || [];
+  
+  const selected = chunkList.find((c) => c.id === selectedId);
 
   if (loading) {
     return (

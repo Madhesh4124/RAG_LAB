@@ -22,6 +22,16 @@ class PipelineFactory:
         kwargs = config.copy()
         strategy = kwargs.pop("type", None)
 
+        # Backward-compat normalization for semantic chunking configs:
+        # frontend presets use `chunk_size`, while SemanticChunker expects
+        # `max_chunk_size`. It also does not support `overlap`.
+        if strategy == "semantic":
+            if "max_chunk_size" not in kwargs and "chunk_size" in kwargs:
+                kwargs["max_chunk_size"] = kwargs.pop("chunk_size")
+            else:
+                kwargs.pop("chunk_size", None)
+            kwargs.pop("overlap", None)
+
         if strategy == "fixed_size":
             from app.services.chunking.fixed_size import FixedSizeChunker
             return FixedSizeChunker(**kwargs)

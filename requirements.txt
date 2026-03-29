@@ -82,7 +82,6 @@ multidict==6.7.1
 mypy_extensions==1.1.0
 numpy==1.26.4
 oauthlib==3.3.1
-ollama==0.2.0
 onnxruntime==1.23.2
 openai==2.29.0
 opentelemetry-api==1.40.0

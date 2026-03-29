@@ -9,7 +9,7 @@ const CHUNK_COLORS = [
   { bg: "bg-yellow-100",border: "border-yellow-400", text: "text-yellow-800",ring: "ring-yellow-300"},
 ];
 
-export default function ChunkVisualizer({ chunks = [], loading }) {
+export default function ChunkVisualizer({ chunks = [], loading, error }) {
   const [selectedId, setSelectedId] = useState(null);
 
   // handle different response shapes from backend
@@ -28,7 +28,18 @@ export default function ChunkVisualizer({ chunks = [], loading }) {
     );
   }
 
-  if (!chunks.length) {
+  if (error) {
+    return (
+      <div className="flex items-center justify-center h-64 rounded-xl border-2 border-dashed border-red-200 bg-red-50 text-red-600">
+        <div className="text-center space-y-2">
+          <p className="text-sm font-medium">⚠️ Error loading chunks</p>
+          <p className="text-xs text-red-500">{error}</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!chunkList.length) {
     return (
       <div className="flex items-center justify-center h-64 rounded-xl border-2 border-dashed border-gray-200 text-gray-400">
         <p className="text-sm">Upload a document and configure chunking to see the preview.</p>

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { MOCK_COMPARE_RESULTS } from "../../services/api";
+import { compareConfigs } from "../../services/api";
 import ConfigCard from "./ConfigCard";
 import { Button, Spinner } from "../common/index";
 
@@ -7,15 +7,25 @@ export default function CompareMode({ documentId }) {
   const [query,   setQuery]   = useState("");
   const [results, setResults] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [error,   setError]   = useState(null);
 
   const handleRun = async () => {
-    if (!query.trim()) return;
+    if (!query.trim() || !documentId) return;
+    
     setLoading(true);
+    setError(null);
     try {
-      await new Promise((r) => setTimeout(r, 1200));
-      setResults(MOCK_COMPARE_RESULTS);
+      console.log(`[Compare] Running comparison for doc=${documentId}, query="${query}"`);
+      const { data } = await compareConfigs({
+        document_id: documentId,
+        query: query.trim(),
+      });
+      console.log(`[Compare] Success:`, data);
+      setResults(data.results || []);
     } catch (e) {
-      console.error(e);
+      const errorMsg = e.response?.data?.detail || e.message || "Failed to run comparison";
+      console.error(`[Compare] Error:`, errorMsg, e);
+      setError(errorMsg);
     } finally {
       setLoading(false);
     }
@@ -39,7 +49,7 @@ export default function CompareMode({ documentId }) {
           placeholder="Ask a question about your document…"
           className="flex-1 rounded-lg border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
         />
-        <Button onClick={handleRun} disabled={!query.trim() || loading}>
+        <Button onClick={handleRun} disabled={!query.trim() || !documentId || loading}>
           {loading ? "Running…" : "Run Comparison"}
         </Button>
       </div>
@@ -48,9 +58,16 @@ export default function CompareMode({ documentId }) {
         <span className="font-semibold">🔒 Controlled variables:</span> Same LLM, temperature, max context. Only chunking strategy, embedding model, and top-k vary.
       </div>
 
+      {error && (
+        <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
+          <p className="font-semibold">Error running comparison:</p>
+          <p>{error}</p>
+        </div>
+      )}
+
       {loading && <Spinner label="Running pipeline across all configurations…" />}
 
-      {results && !loading && (
+      {results && results.length > 0 && !loading && (
         <>
           <div className="grid gap-4 md:grid-cols-3">
             {results.map((result) => (
@@ -59,6 +76,12 @@ export default function CompareMode({ documentId }) {
           </div>
           <MetricsTable results={results} />
         </>
+      )}
+
+      {results && results.length === 0 && !loading && !error && (
+        <div className="rounded-lg border-2 border-dashed border-gray-200 p-8 text-center text-gray-400">
+          <p className="text-sm">No configurations found. Create a configuration in the Setup page first.</p>
+        </div>
       )}
     </div>
   );

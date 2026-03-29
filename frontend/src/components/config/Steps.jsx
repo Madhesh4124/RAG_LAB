@@ -2,9 +2,9 @@
 import { Card } from "../common/index";
 
 const MODELS = [
-  { key: "google",      label: "Google Gemini", icon: "🌐", provider: "Google",  note: "gemini-embedding-2-preview. Default choice." },
-  { key: "nvidia",      label: "Nvidia",        icon: "⚡", provider: "Nvidia",  note: "High performance embeddings." },
-  { key: "huggingface", label: "HuggingFace",   icon: "🤗", provider: "HF API", note: "Open source models." },
+  { key: "google",      provider: "google", model: "models/gemini-embedding-2-preview", label: "Google Gemini", icon: "🌐", note: "gemini-embedding-2-preview. Default choice." },
+  { key: "nvidia",      provider: "nvidia", model: "nvidia",                           label: "Nvidia",        icon: "⚡", note: "High performance embeddings." },
+  { key: "huggingface", provider: "huggingface", model: "sentence-transformers/all-MiniLM-L6-v2", label: "HuggingFace",   icon: "🤗", note: "Open source models." },
 ];
 
 export function EmbeddingStep({ config, onChange }) {
@@ -16,7 +16,7 @@ export function EmbeddingStep({ config, onChange }) {
       </div>
       <div className="grid gap-3 sm:grid-cols-3">
         {MODELS.map((m) => (
-          <Card key={m.key} selected={config.model === m.key} onClick={() => onChange({ model: m.key })}>
+          <Card key={m.key} selected={config.provider === m.provider} onClick={() => onChange({ provider: m.provider, model: m.model })}>
             <div className="text-2xl mb-1">{m.icon}</div>
             <p className="font-semibold text-sm text-gray-800">{m.label}</p>
             <p className="text-xs text-gray-400 mt-0.5">{m.provider}</p>
@@ -32,7 +32,6 @@ export function EmbeddingStep({ config, onChange }) {
 const STORES = [
   { key: "chroma", label: "ChromaDB",  icon: "🗄️", note: "Simple, persistent, great for demos. Default choice." },
   { key: "faiss",  label: "FAISS",     icon: "⚡", note: "Fast in-memory search. No persistence by default." },
-  { key: "qdrant", label: "Qdrant",    icon: "🔍", note: "Production-grade. Needs separate server running." },
 ];
 
 export function VectorStoreStep({ config, onChange }) {

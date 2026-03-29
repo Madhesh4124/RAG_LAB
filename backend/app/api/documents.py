@@ -41,24 +41,51 @@ def get_document(doc_id: uuid.UUID, db: Session = Depends(get_db)):
     return doc
 
 @router.get("/{doc_id}/chunks")
-def preview_chunks(doc_id: uuid.UUID, config_id: uuid.UUID = Query(...), db: Session = Depends(get_db)):
+def preview_chunks(doc_id: uuid.UUID, config_id: Optional[uuid.UUID] = Query(None), db: Session = Depends(get_db)):
     doc = db.get(Document, doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    
+    if not config_id:
+        raise HTTPException(status_code=400, detail="config_id is required to preview chunks. Please complete the configuration wizard.")
         
     config = db.get(RAGConfig, config_id)
     if not config:
         raise HTTPException(status_code=404, detail="Config not found")
         
     try:
-        from app.services.pipeline import PipelineFactory
-        pipeline = PipelineFactory.build(config.config_json)
+        from app.services.pipeline_factory import PipelineFactory
+        pipeline = PipelineFactory.create_pipeline(config.config_json)
         
         # Assumption: the pipeline provides access to a built chunker
         if hasattr(pipeline, "chunker"):
-            chunks = pipeline.chunker.chunk(doc.content)
-            # return dictionary representations of chunk datastructure
-            return {"chunks": [c.__dict__ if hasattr(c, "__dict__") else c for c in chunks]}
+            metadata = {"filename": doc.filename, "file_type": doc.file_type}
+            chunks = pipeline.chunker.chunk(doc.content, metadata)
+            
+            # Enrich chunks with sequence numbers and overlap info for frontend
+            enriched_chunks = []
+            for idx, chunk in enumerate(chunks):
+                chunk_dict = chunk.__dict__.copy() if hasattr(chunk, "__dict__") else dict(chunk)
+                # Convert UUID to string for JSON serialization
+                if isinstance(chunk_dict.get("id"), uuid.UUID):
+                    chunk_dict["id"] = str(chunk_dict["id"])
+                chunk_dict["sequence_num"] = idx
+                
+                # Calculate overlap with previous chunk
+                if idx > 0:
+                    prev_end = chunks[idx - 1].end_char
+                    if chunk.start_char < prev_end:
+                        chunk_dict["overlap_prev"] = prev_end - chunk.start_char
+                
+                # Calculate overlap with next chunk
+                if idx < len(chunks) - 1:
+                    next_start = chunks[idx + 1].start_char
+                    if chunk.end_char > next_start:
+                        chunk_dict["overlap_next"] = chunk.end_char - next_start
+                
+                enriched_chunks.append(chunk_dict)
+            
+            return {"chunks": enriched_chunks}
         else:
             return {"chunks": [], "error": "Pipeline missing chunker component."}
     except Exception as e:

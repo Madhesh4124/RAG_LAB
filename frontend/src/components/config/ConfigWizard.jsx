@@ -24,19 +24,25 @@ export default function ConfigWizard({ onComplete }) {
   const isLastStep = step === STEP_LABELS.length - 1;
 
   const handleComplete = async () => {
-  try {
-    const { data } = await saveConfig({
-      document_id: document?.id,
-      name: "My Config",
-      config_json: config
-    });
-    navigate(`/preview?doc=${document?.id}&config=${data.id}`);
-  } catch (e) {
-    console.error(e);
-    // fallback without config
-    navigate(`/preview?doc=${document?.id}`);
-  }
-};
+    if (!document?.id) {
+      console.error("No document uploaded");
+      return;
+    }
+    try {
+      console.log("[ConfigWizard] Saving config...", config);
+      const { data } = await saveConfig({
+        document_id: document?.id,
+        name: "My Config",
+        config_json: config
+      });
+      console.log("[ConfigWizard] Config saved successfully:", data);
+      navigate(`/preview?doc=${document?.id}&config=${data.id}`);
+    } catch (e) {
+      const errorMsg = e.response?.data?.detail || e.message || "Failed to save config";
+      console.error("[ConfigWizard] Error:", errorMsg, e);
+      alert(`Failed to save configuration: ${errorMsg}`);
+    }
+  };
 
   const stepComponents = [
     <DocumentUpload

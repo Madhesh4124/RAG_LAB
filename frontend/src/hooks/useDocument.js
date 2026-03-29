@@ -18,26 +18,34 @@ export function useDocument() {
       fd.append("file", file);
       const { data } = await uploadDocument(fd, setUploadProgress);
       setDocument(data);
-    } catch {
-      // TODO: remove mock once backend is live
-      setDocument({ id: "mock-doc-1", filename: file.name });
+    } catch (err) {
+      setError(err.response?.data?.detail || err.message || "Upload failed");
+      console.error("Upload error:", err);
     } finally {
       setUploading(false);
     }
   }, []);
 
   const fetchChunks = useCallback(async (docId, configId) => {
-  setLoadingChunks(true);
-  try {
-    const { data } = await getChunks(docId, configId);
-    setChunks(data);
-  } catch (e) {
-    console.error(e);
-    setChunks(MOCK_CHUNKS); // fallback to mock
-  } finally {
-    setLoadingChunks(false);
-  }
-}, []);
+    setLoadingChunks(true);
+    setError(null);
+    try {
+      if (!configId) {
+        throw new Error("Config ID is required. Please complete the configuration wizard.");
+      }
+      console.log(`[Chunks] Fetching chunks for doc=${docId}, config=${configId}`);
+      const { data } = await getChunks(docId, configId);
+      console.log("[Chunks] Success:", data);
+      setChunks(data.chunks || data);
+    } catch (e) {
+      const errorMsg = e.response?.data?.detail || e.message || "Failed to fetch chunks";
+      console.error("[Chunks] Error:", errorMsg, e);
+      setError(errorMsg);
+      setChunks(MOCK_CHUNKS);
+    } finally {
+      setLoadingChunks(false);
+    }
+  }, []);
 
   const clearDocument = () => { setDocument(null); setChunks([]); };
 

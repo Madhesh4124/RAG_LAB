@@ -31,10 +31,10 @@ class PipelineTimer:
     def to_metrics_dict(self) -> Dict[str, float]:
         """Returns a dict mapping directly to the Metrics model fields."""
         return {
-            "chunking_time_ms": self._durations.get("chunking", 0.0),
-            "embedding_time_ms": self._durations.get("embedding", 0.0),
-            "retrieval_time_ms": self._durations.get("retrieval", 0.0),
-            "llm_time_ms": self._durations.get("generation", 0.0),
+            "chunking_time_ms": self._durations.get("chunking_time_ms", 0.0),
+            "embedding_time_ms": self._durations.get("embedding_time_ms", 0.0),
+            "retrieval_time_ms": self._durations.get("retrieval_time_ms", 0.0),
+            "llm_time_ms": self._durations.get("llm_time_ms", 0.0),
             "total_time_ms": self.get_total_ms()
         }
 

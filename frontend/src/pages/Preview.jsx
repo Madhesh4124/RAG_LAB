@@ -13,12 +13,17 @@ export default function Preview() {
   const configId = params.get("config");
   const navigate   = useNavigate();
 
-  const { chunks, loadingChunks, fetchChunks } = useDocument();
+  const { chunks, loadingChunks, fetchChunks, error } = useDocument();
   const { config } = useConfig();
 
   useEffect(() => {
-  if (docId) fetchChunks(docId, configId);
-}, [docId, configId]);
+    if (docId && configId) {
+      console.log(`[Preview] Loading chunks with doc=${docId}, config=${configId}`);
+      fetchChunks(docId, configId);
+    } else {
+      console.warn("[Preview] Missing docId or configId. Doc:", docId, "Config:", configId);
+    }
+  }, [docId, configId]);
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-8 space-y-4">
@@ -35,7 +40,7 @@ export default function Preview() {
         </div>
       </div>
 
-      <ChunkVisualizer chunks={chunks} loading={loadingChunks} />
+      <ChunkVisualizer chunks={chunks} loading={loadingChunks} error={error} />
     </div>
   );
 }

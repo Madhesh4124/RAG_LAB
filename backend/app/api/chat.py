@@ -31,30 +31,28 @@ def chat_endpoint(
     timer = PipelineTimer()
     
     try:
-        timer.start("pipeline_build")
         pipeline = PipelineFactory.create_pipeline(config.config_json)
-        timer.stop("pipeline_build")
 
-        timer.start("chunking")
+        timer.start("chunking_time_ms")
         pipeline.index_document(
             text=doc.content,
             doc_id=str(doc_id),
             metadata={"filename": doc.filename, "file_type": doc.file_type}
         )
-        timer.stop("chunking")
+        timer.stop("chunking_time_ms")
 
-        timer.start("retrieval")
+        timer.start("retrieval_time_ms")
         retrieved_results = pipeline.retrieve(query)
-        timer.stop("retrieval")
+        timer.stop("retrieval_time_ms")
         
         if retrieved_results and isinstance(retrieved_results[0], tuple):
             retrieved_chunks_only = [res[0] for res in retrieved_results]
         else:
             retrieved_chunks_only = retrieved_results
             
-        timer.start("generation")
+        timer.start("llm_time_ms")
         answer = pipeline.generate(query, retrieved_chunks_only)
-        timer.stop("generation")
+        timer.stop("llm_time_ms")
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

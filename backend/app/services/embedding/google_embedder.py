@@ -13,7 +13,7 @@ from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
 from app.services.embedding.base import BaseEmbedder
 
-load_dotenv()
+load_dotenv(override=True)
 
 
 class GoogleEmbedder(BaseEmbedder):
@@ -21,28 +21,35 @@ class GoogleEmbedder(BaseEmbedder):
 
     Args:
         model: The Google embedding model identifier.
-               Defaults to ``"models/text-embedding-004"``.
+               Defaults to ``"models/gemini-embedding-2-preview"``.
 
     Raises:
         ValueError: If *GOOGLE_API_KEY* is not set in the environment
                     or ``.env`` file.
     """
 
-    def __init__(self, model: str = "models/text-embedding-004") -> None:
+    def __init__(self, model: str = "models/gemini-embedding-2-preview") -> None:
         self.model = model
 
+        # 1. Strictly fetch GOOGLE_API_KEY
         api_key = os.getenv("GOOGLE_API_KEY")
+        
         if not api_key:
             raise ValueError(
-                "GOOGLE_API_KEY is not set. "
-                "Please add it to your .env file."
+                "GOOGLE_API_KEY is not set in the environment. "
+                "Please add 'GOOGLE_API_KEY=your_key' to your .env file."
             )
 
+        # 2. Clear GEMINI_API_KEY from the environment if it exists 
+        # This prevents the "Both keys are set" warning from the underlying SDK
+        if "GEMINI_API_KEY" in os.environ:
+            del os.environ["GEMINI_API_KEY"]
+
+        # 3. Initialize the embeddings with the explicit key
         self._embeddings = GoogleGenerativeAIEmbeddings(
             model=self.model,
             google_api_key=api_key,
         )
-
     # ── BaseEmbedder interface ──────────────────────────────────────
 
     @property

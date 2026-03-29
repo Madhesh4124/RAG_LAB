@@ -6,7 +6,6 @@ export default function Setup() {
   const navigate = useNavigate();
 
   const handleComplete = ({ config, documentId }) => {
-    // TODO: navigate to chunk preview or chat after pipeline built
     navigate(`/preview?doc=${documentId}`);
   };
 

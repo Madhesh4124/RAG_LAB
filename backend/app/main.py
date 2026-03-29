@@ -8,6 +8,7 @@ from app.api.documents import router as documents_router
 from app.api.chat import router as chat_router
 from app.api.config import router as config_router
 from app.api.analysis import router as analysis_router
+from app.api.compare import router as compare_router
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -41,6 +42,7 @@ app.include_router(documents_router)
 app.include_router(chat_router)
 app.include_router(config_router)
 app.include_router(analysis_router)
+app.include_router(compare_router)
 
 # Define root health check purely optionally
 @app.get("/")

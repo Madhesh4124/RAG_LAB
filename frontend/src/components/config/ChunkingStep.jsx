@@ -41,7 +41,7 @@ export default function ChunkingStep({ config, onChange }) {
       {/* Strategy cards */}
       <div className="grid gap-3 sm:grid-cols-3">
         {STRATEGIES.map((s) => (
-          <Card key={s.key} selected={config.strategy === s.key} onClick={() => onChange({ strategy: s.key })}>
+          <Card key={s.key} selected={config.type === s.key} onClick={() => onChange({ type: s.key })}>
             <div className="text-2xl mb-1">{s.icon}</div>
             <p className="font-semibold text-sm text-gray-800">{s.label}</p>
             <p className="text-xs text-gray-500 mt-1 mb-2">{s.desc}</p>
@@ -55,7 +55,7 @@ export default function ChunkingStep({ config, onChange }) {
       </div>
 
       {/* Parameters — only show for fixed_size */}
-      {config.strategy === "fixed_size" && (
+      {config.type === "fixed_size" && (
         <div className="grid gap-4 sm:grid-cols-2 mt-2">
           <SliderParam
             label="Chunk Size"

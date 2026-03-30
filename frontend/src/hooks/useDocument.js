@@ -1,5 +1,5 @@
 import { useState, useCallback } from "react";
-import { uploadDocument, getChunks, MOCK_CHUNKS } from "../services/api";
+import { uploadDocument, getChunks } from "../services/api";
 
 export function useDocument() {
   const [document,       setDocument]       = useState(null);
@@ -35,13 +35,16 @@ export function useDocument() {
       }
       console.log(`[Chunks] Fetching chunks for doc=${docId}, config=${configId}`);
       const { data } = await getChunks(docId, configId);
+      if (data?.error) {
+        throw new Error(data.error);
+      }
       console.log("[Chunks] Success:", data);
       setChunks(data.chunks || data);
     } catch (e) {
       const errorMsg = e.response?.data?.detail || e.message || "Failed to fetch chunks";
       console.error("[Chunks] Error:", errorMsg, e);
       setError(errorMsg);
-      setChunks(MOCK_CHUNKS);
+      setChunks([]);
     } finally {
       setLoadingChunks(false);
     }

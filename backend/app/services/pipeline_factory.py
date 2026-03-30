@@ -5,7 +5,7 @@ Takes configuration dictionaries and dynamically initializes
 the concrete implementations for chunking, embedding, and vector storage.
 """
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from app.services.chunking.base import BaseChunker
 from app.services.embedding.base import BaseEmbedder
@@ -17,10 +17,16 @@ class PipelineFactory:
     """Factory to create RAG pipelines dynamically from configurations."""
 
     @staticmethod
-    def create_chunker(config: Dict[str, Any]) -> BaseChunker:
+    def create_chunker(config: Dict[str, Any], embedder: Optional[BaseEmbedder] = None) -> BaseChunker:
         """Create a chunker dynamically based on the configuration."""
         kwargs = config.copy()
         strategy = kwargs.pop("type", None)
+
+        if strategy == "fixed_size":
+            kwargs = {
+                "chunk_size": kwargs.get("chunk_size", 512),
+                "overlap": kwargs.get("overlap", 50),
+            }
 
         # Backward-compat normalization for semantic chunking configs:
         # frontend presets use `chunk_size`, while SemanticChunker expects
@@ -31,6 +37,46 @@ class PipelineFactory:
             else:
                 kwargs.pop("chunk_size", None)
             kwargs.pop("overlap", None)
+            kwargs = {
+                "max_chunk_size": kwargs.get("max_chunk_size", 512),
+                "similarity_threshold": kwargs.get("similarity_threshold", 0.6),
+                "min_chunk_size": kwargs.get("min_chunk_size", 100),
+                "use_centroid": kwargs.get("use_centroid", True),
+                "overlap_sentences": kwargs.get("overlap_sentences", 0),
+                "hard_split_threshold": kwargs.get("hard_split_threshold", 0.4),
+                "max_sentences_per_chunk": kwargs.get("max_sentences_per_chunk"),
+                "smoothing_margin": kwargs.get("smoothing_margin", 0.05),
+                "debug": kwargs.get("debug", False),
+                "require_embedder": kwargs.get("require_embedder", True),
+                "embedder": embedder,
+            }
+
+        if strategy in ("chapter", "chapter_based"):
+            kwargs = {
+                "heading_patterns": kwargs.get("heading_patterns"),
+            }
+            if kwargs["heading_patterns"] is None:
+                kwargs = {}
+
+        if strategy == "recursive":
+            kwargs = {
+                "chunk_size": kwargs.get("chunk_size", 512),
+                "overlap": kwargs.get("overlap", 50),
+                "separators": kwargs.get("separators"),
+            }
+            if kwargs["separators"] is None:
+                kwargs.pop("separators")
+
+        if strategy == "regex":
+            kwargs = {
+                "pattern": kwargs.get("pattern", r"\n\n+"),
+                "min_chunk_size": kwargs.get("min_chunk_size", 100),
+            }
+
+        if strategy == "sentence_window":
+            kwargs = {
+                "window_size": kwargs.get("window_size", 3),
+            }
 
         if strategy == "fixed_size":
             from app.services.chunking.fixed_size import FixedSizeChunker
@@ -38,8 +84,8 @@ class PipelineFactory:
         elif strategy == "semantic":
             from app.services.chunking.semantic import SemanticChunker
             return SemanticChunker(**kwargs)
-        elif strategy == "chapter":
-            from app.services.chunking.chapter import ChapterChunker
+        elif strategy in ("chapter", "chapter_based"):
+            from app.services.chunking.chapter_based import ChapterChunker
             return ChapterChunker(**kwargs)
         elif strategy == "recursive":
             from app.services.chunking.recursive import RecursiveChunker
@@ -47,6 +93,9 @@ class PipelineFactory:
         elif strategy == "regex":
             from app.services.chunking.regex_chunker import RegexChunker
             return RegexChunker(**kwargs)
+        elif strategy == "sentence_window":
+            from app.services.chunking.sentence_window import SentenceWindowChunker
+            return SentenceWindowChunker(**kwargs)
         else:
             raise ValueError(f"Unknown chunking strategy: {strategy}")
 
@@ -82,9 +131,6 @@ class PipelineFactory:
         if strategy == "chroma":
             from app.services.vectorstore.chroma_store import ChromaStore
             return ChromaStore(**kwargs)
-        elif strategy == "faiss":
-            from app.services.vectorstore.faiss_store import FAISSStore
-            return FAISSStore(**kwargs)
         else:
             raise ValueError(f"Unknown vectorstore strategy: {strategy}")
 
@@ -150,8 +196,8 @@ class PipelineFactory:
         embedder_cfg = config.get("embedder", {})
         vectorstore_cfg = config.get("vectorstore", {})
 
-        chunker = PipelineFactory.create_chunker(chunker_cfg)
         embedder = PipelineFactory.create_embedder(embedder_cfg)
+        chunker = PipelineFactory.create_chunker(chunker_cfg, embedder=embedder)
         vectorstore = PipelineFactory.create_vectorstore(vectorstore_cfg)
 
         retriever = PipelineFactory.create_retriever(config.get("retriever", {}), vectorstore, embedder)

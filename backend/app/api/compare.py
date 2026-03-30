@@ -48,6 +48,9 @@ def compare_configs(
     for config in configs:
         try:
             timer = PipelineTimer()
+            retrieval_cfg = config.config_json.get("retriever", {}) if config.config_json else {}
+            top_k = int(retrieval_cfg.get("top_k", 5))
+            similarity_threshold = retrieval_cfg.get("similarity_threshold", None)
             
             # Build pipeline
             timer.start("chunking_time_ms")
@@ -64,7 +67,14 @@ def compare_configs(
             
             # Retrieve chunks
             timer.start("retrieval_time_ms")
-            retrieved_results = pipeline.retrieve(query)
+            retrieved_results = pipeline.retrieve(query, top_k=top_k)
+
+            if similarity_threshold is not None and retrieved_results and isinstance(retrieved_results[0], tuple):
+                retrieved_results = [
+                    (chunk, score)
+                    for chunk, score in retrieved_results
+                    if score >= float(similarity_threshold)
+                ]
             timer.stop("retrieval_time_ms")
             
             if retrieved_results and isinstance(retrieved_results[0], tuple):

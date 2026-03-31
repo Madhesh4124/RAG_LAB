@@ -20,20 +20,21 @@ class HuggingFaceAPIEmbedder(BaseEmbedder):
     """Embedder backed by Hugging Face Inference API (via LangChain).
 
     Supported models include:
+            - sentence-transformers/all-MiniLM-L6-v2
       - BAAI/bge-base-en-v1.5
       - thenlper/gte-base
       - intfloat/e5-base-v2
 
     Args:
         model: The Hugging Face embedding model identifier.
-               Defaults to ``"BAAI/bge-base-en-v1.5"``.
+               Defaults to ``"sentence-transformers/all-MiniLM-L6-v2"``.
 
     Raises:
         ValueError: If *HUGGINGFACE_API_KEY* is not set in the environment
                     or ``.env`` file.
     """
 
-    def __init__(self, model: str = "BAAI/bge-base-en-v1.5") -> None:
+    def __init__(self, model: str = "sentence-transformers/all-MiniLM-L6-v2") -> None:
         self.model = model
 
         api_key = os.getenv("HUGGINGFACE_API_KEY")

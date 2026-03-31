@@ -1,4 +1,6 @@
 import uuid
+import os
+from copy import deepcopy
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Body
 from sqlalchemy.orm import Session
@@ -13,6 +15,7 @@ from app.utils.timing import PipelineTimer
 router = APIRouter(prefix="/api/compare", tags=["compare"])
 
 
+@router.post("")
 @router.post("/")
 def compare_configs(
     document_id: uuid.UUID = Body(...),
@@ -42,6 +45,12 @@ def compare_configs(
     
     if not configs:
         return {"results": [], "error": "No configurations found for this document"}
+
+    max_configs = int(os.getenv("COMPARE_MAX_CONFIGS_PER_REQUEST", "2"))
+    truncated = False
+    if max_configs > 0 and len(configs) > max_configs:
+        configs = configs[:max_configs]
+        truncated = True
     
     results = []
     
@@ -54,7 +63,13 @@ def compare_configs(
             
             # Build pipeline
             timer.start("chunking_time_ms")
-            pipeline = PipelineFactory.create_pipeline(config.config_json)
+            pipeline_config = deepcopy(config.config_json or {})
+            vectorstore_cfg = deepcopy(pipeline_config.get("vectorstore", {}))
+            if vectorstore_cfg.get("type") == "chroma":
+                vectorstore_cfg["collection_name"] = f"rag_cfg_{config.id}"
+                pipeline_config["vectorstore"] = vectorstore_cfg
+
+            pipeline = PipelineFactory.create_pipeline(pipeline_config)
             
             # Index document
             metadata = {"filename": doc.filename, "file_type": doc.file_type}
@@ -139,4 +154,10 @@ def compare_configs(
                 "chunks": []
             })
     
-    return {"results": results}
+    response = {"results": results}
+    if truncated:
+        response["warning"] = (
+            f"Compared first {max_configs} configs only to avoid provider rate limits. "
+            "Set COMPARE_MAX_CONFIGS_PER_REQUEST to increase this limit."
+        )
+    return response

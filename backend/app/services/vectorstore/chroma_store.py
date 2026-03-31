@@ -6,18 +6,31 @@ Uses LangChain's Chroma wrapper to store and query vector embeddings.
 
 import os
 import uuid
+import warnings
 from typing import Any, Dict, List, Tuple
 
+from chromadb.config import Settings
 from dotenv import load_dotenv
-from langchain_community.vectorstores import Chroma
 from langchain_core.documents import Document
+
+load_dotenv()
+
+# Disable noisy Chroma telemetry by default in local/dev runs.
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "FALSE")
+os.environ.setdefault("CHROMA_TELEMETRY_IMPL", "none")
+
+try:
+    from langchain_chroma import Chroma
+except Exception:  # pragma: no cover - compatibility fallback
+    warnings.filterwarnings(
+        "ignore",
+        message=r".*The class `Chroma` was deprecated in LangChain.*",
+    )
+    from langchain_community.vectorstores import Chroma
 
 from app.services.chunking.base import Chunk
 from app.services.embedding.base import BaseEmbedder
 from app.services.vectorstore.base import BaseVectorStore
-
-load_dotenv()
-
 
 class _EmbedderAdapter:
     """Adapter to make BaseEmbedder compatible with LangChain's Embeddings."""
@@ -46,14 +59,22 @@ class ChromaStore(BaseVectorStore):
 
     def _get_vectorstore(self, embedder: BaseEmbedder = None) -> Chroma:
         embedding_function = _EmbedderAdapter(embedder) if embedder else None
+        chroma_settings = Settings(anonymized_telemetry=False)
         return Chroma(
             collection_name=self.collection_name,
             embedding_function=embedding_function,
             persist_directory=self.persist_dir,
+            client_settings=chroma_settings,
         )
 
     def add_chunks(self, chunks: List[Chunk], embedder: BaseEmbedder) -> None:
         if not chunks:
+            return
+
+        first_meta = chunks[0].metadata or {}
+        doc_id = first_meta.get("doc_id")
+        content_hash = first_meta.get("content_hash")
+        if doc_id and self.is_document_indexed(doc_id=doc_id, content_hash=content_hash):
             return
 
         docs = []
@@ -70,12 +91,27 @@ class ChromaStore(BaseVectorStore):
             docs.append(doc)
 
         adapter = _EmbedderAdapter(embedder)
+        chroma_settings = Settings(anonymized_telemetry=False)
         Chroma.from_documents(
             documents=docs,
             embedding=adapter,
             collection_name=self.collection_name,
             persist_directory=self.persist_dir,
+            client_settings=chroma_settings,
         )
+
+    def is_document_indexed(self, doc_id: str, content_hash: str | None = None) -> bool:
+        where: Dict[str, Any] = {"doc_id": doc_id}
+        if content_hash:
+            where["content_hash"] = content_hash
+
+        try:
+            vs = self._get_vectorstore()
+            found = vs._collection.get(where=where, limit=1)
+            ids = found.get("ids", []) if isinstance(found, dict) else []
+            return bool(ids)
+        except Exception:
+            return False
 
     def search(
         self, query: str, embedder: BaseEmbedder, top_k: int = 5

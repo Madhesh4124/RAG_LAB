@@ -19,16 +19,20 @@ load_dotenv()
 class NvidiaEmbedder(BaseEmbedder):
     """Embedder backed by NVIDIA AI Endpoints (via LangChain).
 
+    Supported models include:
+      - nvidia/nv-embed-v1
+      - nvidia/llama-3.2-nemoretriever-300m-embed-v1
+
     Args:
         model: The NVIDIA embedding model identifier.
-               Defaults to ``"nvidia/nv-embed-v2"``.
+               Defaults to ``"nvidia/nv-embed-v1"``.
 
     Raises:
         ValueError: If *NVIDIA_API_KEY* is not set in the environment
                     or ``.env`` file.
     """
 
-    def __init__(self, model: str = "nvidia/nv-embed-v2") -> None:
+    def __init__(self, model: str = "nvidia/nv-embed-v1") -> None:
         self.model = model
 
         api_key = os.getenv("NVIDIA_API_KEY")
@@ -41,6 +45,7 @@ class NvidiaEmbedder(BaseEmbedder):
         self._embeddings = NVIDIAEmbeddings(
             model=self.model,
             api_key=api_key,
+            truncate="NONE",
         )
 
     # ── BaseEmbedder interface ──────────────────────────────────────

@@ -1,28 +1,72 @@
 // ── EmbeddingStep ────────────────────────────────────────────────
-import { Card } from "../common/index";
-
-const MODELS = [
-  { key: "google",      provider: "google", model: "models/gemini-embedding-2-preview", label: "Google Gemini", icon: "🌐", note: "gemini-embedding-2-preview. Default choice." },
-  { key: "nvidia",      provider: "nvidia", model: "nvidia",                           label: "Nvidia",        icon: "⚡", note: "High performance embeddings." },
-  { key: "huggingface", provider: "huggingface", model: "sentence-transformers/all-MiniLM-L6-v2", label: "HuggingFace",   icon: "🤗", note: "Open source models." },
-];
+const EMBEDDING_MODELS = {
+  nvidia: [
+    { value: "nvidia/nv-embed-v1", label: "nvidia/nv-embed-v1 (Default)" },
+    {
+      value: "nvidia/llama-3.2-nemoretriever-300m-embed-v1",
+      label: "nvidia/llama-3.2-nemoretriever-300m-embed-v1",
+    },
+  ],
+  huggingface: [
+    {
+      value: "sentence-transformers/all-MiniLM-L6-v2",
+      label: "sentence-transformers/all-MiniLM-L6-v2",
+    },
+    { value: "BAAI/bge-base-en-v1.5", label: "BAAI/bge-base-en-v1.5" },
+    { value: "intfloat/e5-base-v2", label: "intfloat/e5-base-v2" },
+    { value: "thenlper/gte-base", label: "thenlper/gte-base" },
+    {
+      value: "sentence-transformers/multi-qa-mpnet-base-dot-v1",
+      label: "sentence-transformers/multi-qa-mpnet-base-dot-v1",
+    },
+  ],
+};
 
 export function EmbeddingStep({ config, onChange }) {
+  const selectedProvider = config.provider === "huggingface" ? "huggingface" : "nvidia";
+  const providerModels = EMBEDDING_MODELS[selectedProvider];
+  const selectedModel =
+    providerModels.find((m) => m.value === config.model)?.value || providerModels[0].value;
+
   return (
     <div className="space-y-4">
       <div>
         <h2 className="text-lg font-semibold text-gray-800">Embedding Model</h2>
-        <p className="text-sm text-gray-500">Converts text chunks into vectors for similarity search.</p>
       </div>
-      <div className="grid gap-3 sm:grid-cols-3">
-        {MODELS.map((m) => (
-          <Card key={m.key} selected={config.provider === m.provider} onClick={() => onChange({ provider: m.provider, model: m.model })}>
-            <div className="text-2xl mb-1">{m.icon}</div>
-            <p className="font-semibold text-sm text-gray-800">{m.label}</p>
-            <p className="text-xs text-gray-400 mt-0.5">{m.provider}</p>
-            <p className="text-xs text-gray-500 mt-2">{m.note}</p>
-          </Card>
-        ))}
+
+      <div className="rounded-xl border border-gray-200 bg-white p-4 space-y-3">
+        <label className="text-sm font-medium text-gray-700" htmlFor="embed-provider">
+          Provider
+        </label>
+        <select
+          id="embed-provider"
+          value={selectedProvider}
+          onChange={(e) => {
+            const provider = e.target.value;
+            const fallbackModel = EMBEDDING_MODELS[provider][0].value;
+            onChange({ provider, model: fallbackModel });
+          }}
+          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+        >
+          <option value="nvidia">NVIDIA</option>
+          <option value="huggingface">Hugging Face</option>
+        </select>
+
+        <label className="text-sm font-medium text-gray-700" htmlFor="embed-model">
+          Model
+        </label>
+        <select
+          id="embed-model"
+          value={selectedModel}
+          onChange={(e) => onChange({ provider: selectedProvider, model: e.target.value })}
+          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+        >
+          {providerModels.map((model) => (
+            <option key={model.value} value={model.value}>
+              {model.label}
+            </option>
+          ))}
+        </select>
       </div>
     </div>
   );

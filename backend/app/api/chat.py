@@ -1,4 +1,5 @@
 import uuid
+from copy import deepcopy
 from fastapi import APIRouter, Depends, HTTPException, Body
 from sqlalchemy.orm import Session
 from sqlalchemy import select
@@ -31,7 +32,13 @@ def chat_endpoint(
     timer = PipelineTimer()
     
     try:
-        pipeline = PipelineFactory.create_pipeline(config.config_json)
+        pipeline_config = deepcopy(config.config_json or {})
+        vectorstore_cfg = deepcopy(pipeline_config.get("vectorstore", {}))
+        if vectorstore_cfg.get("type") == "chroma":
+            vectorstore_cfg["collection_name"] = f"rag_cfg_{config.id}"
+            pipeline_config["vectorstore"] = vectorstore_cfg
+
+        pipeline = PipelineFactory.create_pipeline(pipeline_config)
         retrieval_cfg = config.config_json.get("retriever", {}) if config.config_json else {}
         top_k = int(retrieval_cfg.get("top_k", 5))
         similarity_threshold = retrieval_cfg.get("similarity_threshold", None)

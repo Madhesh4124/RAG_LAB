@@ -5,6 +5,7 @@ Orchestrates the chunking, embedding, and vector storage components
 into a single, unified workflow.
 """
 
+import hashlib
 from typing import Any, Dict, List, Tuple, Optional
 
 from app.services.chunking.base import BaseChunker, Chunk
@@ -52,6 +53,17 @@ class RAGPipeline:
         
         enriched_metadata = metadata.copy() if metadata else {}
         enriched_metadata["doc_id"] = doc_id
+        enriched_metadata["content_hash"] = hashlib.sha256(
+            text.encode("utf-8")
+        ).hexdigest()
+
+        if hasattr(self.vectorstore, "is_document_indexed"):
+            is_indexed = self.vectorstore.is_document_indexed(
+                doc_id=doc_id,
+                content_hash=enriched_metadata["content_hash"],
+            )
+            if is_indexed:
+                return
 
         # 1. Chunk the document (Timed)
         self.timer.start("chunking_time_ms")

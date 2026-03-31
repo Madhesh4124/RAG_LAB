@@ -17,10 +17,13 @@ class GeminiClient:
         self.model_name = model
         self.temperature = temperature
         
-        api_key = os.getenv("GEMINI_API_KEY")
+        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         if not api_key:
             import logging
-            logging.warning("GEMINI_API_KEY environment variable is missing. LLM features will be unavailable.")
+            logging.warning(
+                "Neither GEMINI_API_KEY nor GOOGLE_API_KEY is set. "
+                "LLM features will be unavailable."
+            )
             self.llm = None
             return
             
@@ -33,7 +36,9 @@ class GeminiClient:
     def generate(self, query: str, chunks: List[Chunk]) -> str:
         """Generate response based on query and context chunks."""
         if not self.llm:
-            raise RuntimeError("LLM client not initialized. GEMINI_API_KEY is missing.")
+            raise RuntimeError(
+                "LLM client not initialized. GEMINI_API_KEY/GOOGLE_API_KEY is missing."
+            )
             
         chunks_text = "\n---\n".join([chunk.text for chunk in chunks])
         prompt = f"Answer based on context: {chunks_text}\n\nQuestion: {query}"
@@ -45,7 +50,9 @@ class GeminiClient:
     def generate_with_memory(self, query: str, chunks: List[Chunk], context: str) -> str:
         """Generate response based on query, context chunks, and conversation history."""
         if not self.llm:
-            raise RuntimeError("LLM client not initialized. GEMINI_API_KEY is missing.")
+            raise RuntimeError(
+                "LLM client not initialized. GEMINI_API_KEY/GOOGLE_API_KEY is missing."
+            )
             
         chunks_text = "\n---\n".join([chunk.text for chunk in chunks])
         prompt = f"Conversation History:\n{context}\n\nAnswer based on context: {chunks_text}\n\nQuestion: {query}"

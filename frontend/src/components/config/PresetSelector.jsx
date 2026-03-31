@@ -1,7 +1,7 @@
 const PRESETS = [
   { key: "fast",     label: "⚡ Fast",     desc: "Small chunks, quick answers. Less accurate." },
   { key: "balanced", label: "⚖️ Balanced", desc: "Good mix of speed and accuracy." },
-  { key: "accurate", label: "🎯 Accurate", desc: "Semantic chunking + OpenAI. Slower but best results." },
+  { key: "accurate", label: "🎯 Accurate", desc: "Semantic chunking + stronger Hugging Face embeddings. Slower but better quality." },
 ];
 
 export default function PresetSelector({ onSelect, current }) {

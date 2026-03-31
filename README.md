@@ -60,10 +60,8 @@ Customize every component of your RAG stack:
 - `buffer_memory` – Standard sliding window memory
 - `summary_memory` – Summarizes older messages to preserve context
 
-**Vector Stores:**
+**Vector Store:**
 - ChromaDB – Lightweight, embedded vector database
-- FAISS – Scalable similarity search
-- Extensible for additional vector stores
 
 ### 3. **Chunk Visualization & Preview**
 - See exactly how your document is chunked before running queries
@@ -143,7 +141,7 @@ frontend/
 
 ### Data Storage
 - **Database**: SQLite (default, upgradeable to PostgreSQL)
-- **Vector Store**: ChromaDB (embedded) or FAISS
+- **Vector Store**: ChromaDB (embedded)
 - **Documents**: Stored in database
 - **Configurations**: JSON stored in database for versioning
 
@@ -226,7 +224,6 @@ frontend/
 - **LangChain** – RAG pipeline orchestration patterns
 - **Google GenAI** – Gemini LLM integration
 - **HuggingFace Transformers** – Embedding models
-- **FAISS** – Scalable similarity search
 
 ### Frontend
 - **React 18** – UI framework

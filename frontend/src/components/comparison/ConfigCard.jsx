@@ -4,6 +4,9 @@ import { Badge } from "../common/index";
 export default function ConfigCard({ result }) {
   const [showChunks, setShowChunks] = useState(false);
   const { configName, params, answer, metrics, chunks, error } = result;
+  const responseTimeMs = Number.isFinite(Number(metrics?.response_time_ms))
+    ? Math.round(Number(metrics.response_time_ms))
+    : 0;
   
   // Handle error case
   if (error) {
@@ -53,7 +56,7 @@ export default function ConfigCard({ result }) {
       {/* Metrics */}
       <div className="grid grid-cols-2 gap-px bg-gray-100 border-t border-gray-200">
         {[
-          { label: "Time",       value: `${metrics.response_time_ms}ms` },
+          { label: "Time",       value: `${responseTimeMs}ms` },
           { label: "Chunks",     value: metrics.chunks_retrieved },
           { label: "Similarity", value: metrics.avg_similarity?.toFixed(2) || "0.00" },
           { label: "Tokens",     value: metrics.token_count },

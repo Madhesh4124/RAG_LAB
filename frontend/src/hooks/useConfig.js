@@ -4,7 +4,7 @@ const DEFAULTS = {
   chunker:     { type: "fixed_size", chunk_size: 512, overlap: 50, max_chunk_size: 512, pattern: "\\n\\n+", min_chunk_size: 100, window_size: 3 },
   embedder:    { provider: "nvidia", model: "nvidia/nv-embed-v1" },
   vectorstore: { type: "chroma", collection_name: "my_collection" },
-  retriever:   { type: "dense", top_k: 5 },
+  retriever:   { type: "dense", top_k: 5, similarity_threshold: 0.7 },
   llm:         { provider: "gemini", model: "gemini-2.5-flash" },
 };
 
@@ -18,7 +18,7 @@ const PRESETS = {
 export function useConfig() {
   const [config, setConfig] = useState(DEFAULTS);
   const [step,   setStep]   = useState(0);
-  const TOTAL_STEPS = 4; // upload, embedding, chunking, retrieval
+  const TOTAL_STEPS = 3; // upload, chunking, embedding, retrieval
 
   const updateSection = (section) => (val) =>
     setConfig((c) => ({ ...c, [section]: { ...c[section], ...val } }));

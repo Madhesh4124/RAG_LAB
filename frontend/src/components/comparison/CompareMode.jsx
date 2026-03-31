@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { compareConfigs } from "../../services/api";
+import { compareConfigs, MOCK_COMPARE_RESULTS } from "../../services/api";
 import ConfigCard from "./ConfigCard";
 import { Button, Spinner } from "../common/index";
 
@@ -10,18 +10,23 @@ export default function CompareMode({ documentId }) {
   const [error,   setError]   = useState(null);
 
   const handleRun = async () => {
-    const handleRun = async () => {
-  if (!query.trim()) return;
-  setLoading(true);
-  try {
-    await new Promise((r) => setTimeout(r, 1200));
-    setResults(MOCK_COMPARE_RESULTS);
-  } catch (e) {
-    console.error(e);
-  } finally {
-    setLoading(false);
-  }
-};
+    if (!query.trim() || !documentId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const { data } = await compareConfigs({ document_id: documentId, query });
+      const resultList = data?.results || data;
+      setResults(Array.isArray(resultList) ? resultList : []);
+    } catch (e) {
+      console.error(e);
+      setError(e.response?.data?.detail || e.message || "Failed to compare configurations.");
+      // Keep UI usable in local/dev environments without compare backend wired yet.
+      setResults(MOCK_COMPARE_RESULTS);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="max-w-7xl mx-auto px-4 py-8 space-y-6">
       <div>
@@ -79,8 +84,14 @@ export default function CompareMode({ documentId }) {
 }
 
 function MetricsTable({ results }) {
+  const formatMs = (value) => {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return "0ms";
+    return `${Math.round(n)}ms`;
+  };
+
   const metrics = [
-    { key: "response_time_ms", label: "Response Time",    format: (v) => `${v}ms`,     best: "min" },
+    { key: "response_time_ms", label: "Response Time",    format: formatMs,             best: "min" },
     { key: "chunks_retrieved", label: "Chunks Retrieved", format: (v) => v,             best: null  },
     { key: "avg_similarity",   label: "Avg Similarity",   format: (v) => v.toFixed(2),  best: "max" },
     { key: "token_count",      label: "Tokens Used",      format: (v) => v,             best: "min" },

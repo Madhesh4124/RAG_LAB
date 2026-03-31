@@ -1,5 +1,6 @@
 import uuid
 from copy import deepcopy
+from typing import Any, List
 from fastapi import APIRouter, Depends, HTTPException, Body
 from sqlalchemy.orm import Session
 from sqlalchemy import select
@@ -11,6 +12,27 @@ from app.models.chat import ChatMessage, ChatMessageResponse
 from app.utils.timing import PipelineTimer
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
+
+
+def _fallback_answer_from_chunks(query: str, chunks: List[Any]) -> str:
+    """Build a deterministic answer from retrieved chunks when LLM is unavailable."""
+    if not chunks:
+        return "No relevant chunks were retrieved for this question."
+
+    excerpts = []
+    for idx, chunk in enumerate(chunks[:3], start=1):
+        text = str(getattr(chunk, "text", chunk)).strip().replace("\n", " ")
+        if len(text) > 240:
+            text = text[:240] + "..."
+        excerpts.append(f"{idx}. {text}")
+
+    joined = "\n".join(excerpts)
+    return (
+        "LLM is temporarily unavailable, so this answer is based directly on retrieved chunks.\n"
+        f"Question: {query}\n"
+        "Relevant excerpts:\n"
+        f"{joined}"
+    )
 
 @router.post("/")
 def chat_endpoint(
@@ -68,8 +90,12 @@ def chat_endpoint(
             retrieved_chunks_only = retrieved_results
             
         timer.start("llm_time_ms")
-        answer = pipeline.generate(query, retrieved_chunks_only)
-        timer.stop("llm_time_ms")
+        try:
+            answer = pipeline.generate(query, retrieved_chunks_only)
+        except Exception:
+            answer = _fallback_answer_from_chunks(query, retrieved_chunks_only)
+        finally:
+            timer.stop("llm_time_ms")
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -93,6 +119,7 @@ def chat_endpoint(
                 })
 
     timings = timer.to_metrics_dict() if hasattr(timer, "to_metrics_dict") else timer.get_timings()
+    timings = {k: round(float(v), 0) for k, v in timings.items()}
 
     user_msg = ChatMessage(
         document_id=doc_id,

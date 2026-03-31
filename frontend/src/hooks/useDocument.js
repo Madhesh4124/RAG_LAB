@@ -1,5 +1,5 @@
 import { useState, useCallback } from "react";
-import { uploadDocument, getChunks } from "../services/api";
+import { uploadDocument, getChunks, MOCK_CHUNKS } from "../services/api";
 
 export function useDocument() {
   const [document,       setDocument]       = useState(null);

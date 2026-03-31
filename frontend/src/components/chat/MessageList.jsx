@@ -1,4 +1,10 @@
 export default function MessageList({ messages }) {
+  const formatMs = (value) => {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return "0ms";
+    return `${Math.round(n)}ms`;
+  };
+
   if (!messages.length) {
     return (
       <div className="flex items-center justify-center h-64 text-gray-300">
@@ -50,7 +56,7 @@ export default function MessageList({ messages }) {
                   {Object.entries(msg.timings).map(([key, val]) => (
                     <div key={key} className="flex justify-between text-xs">
                       <span className="text-gray-400">{key.replace("_ms", "").replace(/_/g, " ")}</span>
-                      <span className="font-mono text-gray-600">{val}ms</span>
+                      <span className="font-mono text-gray-600">{formatMs(val)}</span>
                     </div>
                   ))}
                 </div>

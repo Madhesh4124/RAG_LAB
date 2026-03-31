@@ -56,6 +56,28 @@ class ChromaStore(BaseVectorStore):
     def __init__(self, collection_name: str = "rag_collection") -> None:
         self.collection_name = collection_name
         self.persist_dir = os.getenv("CHROMA_PERSIST_DIR", "./chroma_db")
+        self.collection_metadata = {"hnsw:space": "cosine"}
+
+    def _get_collection_space(self, vs: Chroma) -> str:
+        metadata = getattr(vs._collection, "metadata", None) or {}
+        return metadata.get("hnsw:space", "l2")
+
+    def _distance_to_similarity(self, distance: float, space: str) -> float:
+        if space == "cosine":
+            similarity = 1.0 - distance
+        elif space == "ip":
+            similarity = distance
+        else:
+            # Legacy/non-cosine collections fallback: monotonic mapping to (0, 1].
+            similarity = 1.0 / (1.0 + max(distance, 0.0))
+        return float(max(-1.0, min(1.0, similarity)))
+
+    def _reset_collection(self) -> None:
+        vs = self._get_vectorstore()
+        try:
+            vs._client.delete_collection(name=self.collection_name)
+        except Exception:
+            pass
 
     def _get_vectorstore(self, embedder: BaseEmbedder = None) -> Chroma:
         embedding_function = _EmbedderAdapter(embedder) if embedder else None
@@ -65,6 +87,7 @@ class ChromaStore(BaseVectorStore):
             embedding_function=embedding_function,
             persist_directory=self.persist_dir,
             client_settings=chroma_settings,
+            collection_metadata=self.collection_metadata,
         )
 
     def add_chunks(self, chunks: List[Chunk], embedder: BaseEmbedder) -> None:
@@ -74,6 +97,13 @@ class ChromaStore(BaseVectorStore):
         first_meta = chunks[0].metadata or {}
         doc_id = first_meta.get("doc_id")
         content_hash = first_meta.get("content_hash")
+
+        # Ensure collection uses cosine space. If a legacy non-cosine collection
+        # exists with the same name, rebuild it once.
+        current_vs = self._get_vectorstore()
+        if self._get_collection_space(current_vs) != "cosine":
+            self._reset_collection()
+
         if doc_id and self.is_document_indexed(doc_id=doc_id, content_hash=content_hash):
             return
 
@@ -98,6 +128,7 @@ class ChromaStore(BaseVectorStore):
             collection_name=self.collection_name,
             persist_directory=self.persist_dir,
             client_settings=chroma_settings,
+            collection_metadata=self.collection_metadata,
         )
 
     def is_document_indexed(self, doc_id: str, content_hash: str | None = None) -> bool:
@@ -117,6 +148,7 @@ class ChromaStore(BaseVectorStore):
         self, query: str, embedder: BaseEmbedder, top_k: int = 5
     ) -> List[Tuple[Chunk, float]]:
         vs = self._get_vectorstore(embedder)
+        space = self._get_collection_space(vs)
         results = vs.similarity_search_with_score(query, k=top_k)
 
         parsed_results = []
@@ -133,7 +165,8 @@ class ChromaStore(BaseVectorStore):
                 start_char=start_char,
                 end_char=end_char,
             )
-            parsed_results.append((chunk, float(score)))
+            similarity = self._distance_to_similarity(float(score), space)
+            parsed_results.append((chunk, similarity))
 
         return parsed_results
 

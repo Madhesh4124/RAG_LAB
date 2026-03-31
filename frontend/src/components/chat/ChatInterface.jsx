@@ -3,22 +3,6 @@ import MessageList from "./MessageList";
 import InputBox from "./InputBox";
 import { sendMessage } from "../../services/api";
 
-const MOCK_RESPONSE = {
-  answer: "This document is a certificate from a government school confirming completion of an AICTE activity titled 'Helping Local Schools to Achieve Good Results'.",
-  retrieved_chunks: [
-    { id: "c1", text: "This is to certify that the undersigned student from the 8th semester...", score: 0.91 },
-    { id: "c2", text: "This activity was conducted from 20-02-2026 to 27-02-2026 as part of the AICTE initiative.", score: 0.84 },
-  ],
-  timings: {
-    chunking_time_ms: 120,
-    embedding_time_ms: 340,
-    retrieval_time_ms: 210,
-    llm_time_ms: 1800,
-    total_time_ms: 2470,
-  },
-  message_id: "mock-msg-1",
-};
-
 export default function ChatInterface({ docId, configId }) {
   const [messages, setMessages] = useState([]);
   const [loading,  setLoading]  = useState(false);
@@ -42,13 +26,11 @@ export default function ChatInterface({ docId, configId }) {
         timings: data.timings,
       }]);
     } catch (e) {
-      // fallback to mock while backend is being fixed
-      await new Promise((r) => setTimeout(r, 1500));
+      const errMsg = e.response?.data?.detail || e.message || "Chat request failed.";
       setMessages((prev) => [...prev, {
         role: "assistant",
-        content: MOCK_RESPONSE.answer,
-        chunks: MOCK_RESPONSE.retrieved_chunks,
-        timings: MOCK_RESPONSE.timings,
+        content: `Chat failed: ${errMsg}`,
+        chunks: [],
       }]);
     } finally {
       setLoading(false);

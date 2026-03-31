@@ -4,16 +4,16 @@ import { useSession }   from "../../hooks/useSession";
 import DocumentUpload   from "../upload/DocumentUpload";
 import PresetSelector   from "./PresetSelector";
 import ChunkingStep     from "./ChunkingStep";
-import { EmbeddingStep, VectorStoreStep, RetrievalStep } from "./Steps";
+import { EmbeddingStep, RetrievalStep } from "./Steps";
 import { Button, StepIndicator } from "../common/index";
 import { useNavigate } from "react-router-dom";
 import { saveConfig } from "../../services/api";
 
-const STEP_LABELS = ["Upload", "Chunking", "Embedding", "Vector Store", "Retrieval"];
+const STEP_LABELS = ["Upload", "Chunking", "Embedding", "Retrieval"];
 
 export default function ConfigWizard() {
   const navigate = useNavigate();
-  const { config, step, updateChunking, updateEmbedding, updateVectorstore, updateRetrieval, applyPreset, nextStep, prevStep } = useConfig();
+  const { config, step, updateChunking, updateEmbedding, updateRetrieval, applyPreset, nextStep, prevStep } = useConfig();
   const { document, upload, uploading, uploadProgress, clearDocument } = useDocument();
   const { setDocId, setConfigId, setFilename } = useSession();
 
@@ -48,7 +48,6 @@ export default function ConfigWizard() {
     <DocumentUpload document={document} onUpload={upload} onClear={clearDocument} uploading={uploading} progress={uploadProgress} />,
     <ChunkingStep    config={config.chunker}      onChange={updateChunking} />,
     <EmbeddingStep   config={config.embedder}     onChange={updateEmbedding} />,
-    <VectorStoreStep config={config.vectorstore}  onChange={updateVectorstore} />,
     <RetrievalStep   config={config.retriever}    onChange={updateRetrieval} />,
   ];
 

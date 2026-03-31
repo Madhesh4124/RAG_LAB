@@ -135,6 +135,11 @@ class PipelineFactory:
         kwargs = config.copy()
         strategy = kwargs.pop("type", None)
 
+        # Chroma is the only supported vector store. Normalize legacy or
+        # incomplete configurations to chroma.
+        if strategy != "chroma":
+            strategy = "chroma"
+
         if strategy == "chroma":
             from app.services.vectorstore.chroma_store import ChromaStore
             return ChromaStore(**kwargs)

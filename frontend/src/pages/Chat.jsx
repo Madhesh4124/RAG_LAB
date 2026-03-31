@@ -27,8 +27,6 @@ const configId  = params.get("config");
       </div>
       <ChatInterface docId={docId} configId={configId} />
     </div>
-    
   );
-  console.log("docId:", docId, "configId:", configId); 
 }
    

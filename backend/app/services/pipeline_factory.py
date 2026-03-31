@@ -54,15 +54,22 @@ class PipelineFactory:
         if strategy in ("chapter", "chapter_based"):
             kwargs = {
                 "heading_patterns": kwargs.get("heading_patterns"),
+                "max_chunk_size": kwargs.get("max_chunk_size"),
+                "overlap_lines": kwargs.get("overlap_lines", 0),
+                "debug": kwargs.get("debug", False),
             }
             if kwargs["heading_patterns"] is None:
-                kwargs = {}
+                kwargs.pop("heading_patterns")
 
         if strategy == "recursive":
             kwargs = {
                 "chunk_size": kwargs.get("chunk_size", 512),
                 "overlap": kwargs.get("overlap", 50),
                 "separators": kwargs.get("separators"),
+                "min_chunk_size": kwargs.get("min_chunk_size", 50),
+                "apply_overlap_recursively": kwargs.get("apply_overlap_recursively", False),
+                "max_recursion_depth": kwargs.get("max_recursion_depth", 10),
+                "debug": kwargs.get("debug", False),
             }
             if kwargs["separators"] is None:
                 kwargs.pop("separators")

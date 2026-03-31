@@ -1,10 +1,10 @@
 import { useState, useCallback } from "react";
 
 const DEFAULTS = {
-  chunker:     { type: "fixed_size", chunk_size: 512, overlap: 50, max_chunk_size: 512, pattern: "\\n\\n+", min_chunk_size: 100, window_size: 3 },
-  embedder:    { provider: "google", model: "models/gemini-embedding-2-preview" },
+  chunker:     { type: "fixed_size", chunk_size: 512, overlap: 50 },
+  embedder:    { provider: "google", model: "gemini-embedding-2-preview" },
   vectorstore: { type: "chroma", collection_name: "my_collection" },
-  retriever:   { type: "hybrid", alpha: 0.7 },
+  retriever:   { type: "dense", top_k: 5 },
   llm:         { provider: "gemini", model: "gemini-2.5-flash" },
 };
 

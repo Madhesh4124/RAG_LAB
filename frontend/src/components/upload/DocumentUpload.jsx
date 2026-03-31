@@ -1,11 +1,15 @@
 import { useRef, useState } from "react";
 import { ProgressBar } from "../common/index";
+import { useSession } from "../../hooks/useSession";
 
 const ACCEPTED = [".pdf", ".txt", ".epub"];
 
 export default function DocumentUpload({ document, onUpload, onClear, uploading, progress }) {
+  const { docId, filename, clear } = useSession();
   const inputRef  = useRef();
   const [dragOver, setDragOver] = useState(false);
+
+  const activeDoc = document || (docId ? { id: docId, filename } : null);
 
   const handleDrop = (e) => {
     e.preventDefault();
@@ -19,21 +23,24 @@ export default function DocumentUpload({ document, onUpload, onClear, uploading,
     if (file) onUpload(file);
   };
 
-  // ── Already uploaded ──────────────────────────────────────────
-  if (document) {
+  const handleClear = () => {
+    clear();
+    onClear();
+  };
+
+  if (activeDoc) {
     return (
       <div className="rounded-xl border-2 border-green-400 bg-green-50 p-6 text-center space-y-2">
         <div className="text-3xl">✅</div>
-        <p className="font-semibold text-green-800">{document.filename}</p>
+        <p className="font-semibold text-green-800">{activeDoc.filename}</p>
         <p className="text-sm text-green-600">Ready. Click <strong>Next</strong> to configure chunking.</p>
-        <button onClick={onClear} className="text-xs text-gray-400 underline mt-1">
+        <button onClick={handleClear} className="text-xs text-gray-400 underline mt-1">
           Upload a different file
         </button>
       </div>
     );
   }
 
-  // ── Uploading ─────────────────────────────────────────────────
   if (uploading) {
     return (
       <div className="rounded-xl border-2 border-blue-200 bg-blue-50 p-6 space-y-3">
@@ -44,7 +51,6 @@ export default function DocumentUpload({ document, onUpload, onClear, uploading,
     );
   }
 
-  // ── Drop zone ─────────────────────────────────────────────────
   return (
     <div
       onClick={() => inputRef.current.click()}

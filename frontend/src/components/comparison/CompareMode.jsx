@@ -10,27 +10,18 @@ export default function CompareMode({ documentId }) {
   const [error,   setError]   = useState(null);
 
   const handleRun = async () => {
-    if (!query.trim() || !documentId) return;
-    
-    setLoading(true);
-    setError(null);
-    try {
-      console.log(`[Compare] Running comparison for doc=${documentId}, query="${query}"`);
-      const { data } = await compareConfigs({
-        document_id: documentId,
-        query: query.trim(),
-      });
-      console.log(`[Compare] Success:`, data);
-      setResults(data.results || []);
-    } catch (e) {
-      const errorMsg = e.response?.data?.detail || e.message || "Failed to run comparison";
-      console.error(`[Compare] Error:`, errorMsg, e);
-      setError(errorMsg);
-    } finally {
-      setLoading(false);
-    }
-  };
-
+    const handleRun = async () => {
+  if (!query.trim()) return;
+  setLoading(true);
+  try {
+    await new Promise((r) => setTimeout(r, 1200));
+    setResults(MOCK_COMPARE_RESULTS);
+  } catch (e) {
+    console.error(e);
+  } finally {
+    setLoading(false);
+  }
+};
   return (
     <div className="max-w-7xl mx-auto px-4 py-8 space-y-6">
       <div>

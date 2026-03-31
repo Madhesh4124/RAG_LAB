@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, NavLink } from "react-router-dom";
 import Setup   from "./pages/Setup";
 import Preview from "./pages/Preview";
 import Compare from "./pages/Compare";
+import Chat from "./pages/Chat";
 
 function Nav() {
   const link = ({ isActive }) =>
@@ -12,6 +13,7 @@ function Nav() {
       <NavLink to="/setup"   className={link}>Setup</NavLink>
       <NavLink to="/preview" className={link}>Chunk Preview</NavLink>
       <NavLink to="/compare" className={link}>Compare</NavLink>
+      <NavLink to="/chat"    className={link}>Chat</NavLink>
     </nav>
   );
 }
@@ -25,11 +27,7 @@ export default function App() {
   <Route path="/setup"   element={<Setup />} />
   <Route path="/preview" element={<Preview />} />
   <Route path="/compare" element={<Compare />} />
-  <Route path="/chat"    element={
-    <div className="flex items-center justify-center h-96 text-gray-400">
-      <p>Chat coming in Phase 6 🚧</p>
-    </div>
-  } />
+  <Route path="/chat" element={<Chat />} /> 
   </Routes>
       </div>
     </BrowserRouter>

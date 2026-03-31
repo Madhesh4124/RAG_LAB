@@ -69,3 +69,27 @@ export function RetrievalStep({ config, onChange }) {
     </div>
   );
 }
+const STORES = [
+  { key: "chroma", label: "ChromaDB",  icon: "🗄️", note: "Simple, persistent, great for demos. Default choice." },
+  { key: "faiss",  label: "FAISS",     icon: "⚡", note: "Fast in-memory search. No persistence by default." },
+];
+
+export function VectorStoreStep({ config, onChange }) {
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-lg font-semibold text-gray-800">Vector Store</h2>
+        <p className="text-sm text-gray-500">Where embedded chunks are stored and searched.</p>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        {STORES.map((s) => (
+          <Card key={s.key} selected={config.type === s.key} onClick={() => onChange({ type: s.key, collection_name: "my_collection" })}>
+            <div className="text-2xl mb-1">{s.icon}</div>
+            <p className="font-semibold text-sm text-gray-800">{s.label}</p>
+            <p className="text-xs text-gray-500 mt-2">{s.note}</p>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}

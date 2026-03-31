@@ -1,10 +1,11 @@
-// pages/Compare.jsx  ──  feature/compare-mode branch
 import { useSearchParams } from "react-router-dom";
 import CompareMode from "../components/comparison/CompareMode";
+import { useSession } from "../hooks/useSession";
 
 export default function Compare() {
   const [params] = useSearchParams();
-  const docId    = params.get("doc");
+  const { docId: sessionDocId } = useSession();
+  const docId = params.get("doc") || sessionDocId;
 
   return <CompareMode documentId={docId} />;
 }

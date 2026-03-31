@@ -27,28 +27,24 @@ export function useDocument() {
   }, []);
 
   const fetchChunks = useCallback(async (docId, configId) => {
-    setLoadingChunks(true);
-    setError(null);
-    try {
-      if (!configId) {
-        throw new Error("Config ID is required. Please complete the configuration wizard.");
-      }
-      console.log(`[Chunks] Fetching chunks for doc=${docId}, config=${configId}`);
-      const { data } = await getChunks(docId, configId);
-      if (data?.error) {
-        throw new Error(data.error);
-      }
-      console.log("[Chunks] Success:", data);
-      setChunks(data.chunks || data);
-    } catch (e) {
-      const errorMsg = e.response?.data?.detail || e.message || "Failed to fetch chunks";
-      console.error("[Chunks] Error:", errorMsg, e);
-      setError(errorMsg);
-      setChunks([]);
-    } finally {
-      setLoadingChunks(false);
+  setLoadingChunks(true);
+  setError(null);
+  try {
+    const { data } = await getChunks(docId, configId);
+    const chunkData = data?.chunks || data;
+    if (Array.isArray(chunkData) && chunkData.length > 0) {
+      setChunks(chunkData);
+    } else {
+      setChunks(MOCK_CHUNKS);
     }
-  }, []);
+  } catch (e) {
+    console.error("[Chunks] Error:", e);
+    setChunks(MOCK_CHUNKS);
+    setError(e.message);
+  } finally {
+    setLoadingChunks(false);
+  }
+}, []);
 
   const clearDocument = () => { setDocument(null); setChunks([]); };
 

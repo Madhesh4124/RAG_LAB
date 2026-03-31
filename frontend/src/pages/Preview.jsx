@@ -6,13 +6,14 @@ import { useDocument } from "../hooks/useDocument";
 import { useConfig }   from "../hooks/useConfig";
 import { Button }      from "../components/common/index";
 import { useNavigate } from "react-router-dom";
+import { useSession } from "../hooks/useSession";
 
 export default function Preview() {
   const [params]   = useSearchParams();
-  const docId    = params.get("doc");
-  const configId = params.get("config");
   const navigate   = useNavigate();
-
+  const { docId: sessionDocId, configId: sessionConfigId } = useSession();
+  const docId    = params.get("doc")    || sessionDocId;
+  const configId = params.get("config") || sessionConfigId;
   const { chunks, loadingChunks, fetchChunks, error } = useDocument();
   const { config } = useConfig();
 
@@ -36,6 +37,9 @@ export default function Preview() {
         </div>
         <div className="flex gap-2">
           <Button variant="secondary" onClick={() => navigate("/setup")}>← Reconfigure</Button>
+          <Button onClick={() => navigate(`/chat?doc=${docId}&config=${configId}`)}>
+            Start Chatting →
+          </Button>
           <Button onClick={() => navigate(`/compare?doc=${docId}`)}>Try Compare Mode →</Button>
         </div>
       </div>

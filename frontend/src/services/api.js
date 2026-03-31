@@ -1,6 +1,6 @@
 import axios from "axios";
 
-const BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const BASE = import.meta.env.VITE_API_URL || "http://localhost:8004";
 
 const api = axios.create({ baseURL: BASE });
 
@@ -66,3 +66,4 @@ export const MOCK_COMPARE_RESULTS = [
     chunks: MOCK_CHUNKS,
   },
 ];
+export const sendMessage = (payload) => api.post("/api/chat/", payload);

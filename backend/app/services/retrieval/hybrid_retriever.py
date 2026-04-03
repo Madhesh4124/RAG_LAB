@@ -1,6 +1,7 @@
 """Hybrid Retriever combining Dense and Sparse retrievers using RRF."""
 
 from typing import Any, Dict, List, Tuple
+import logging
 
 from app.services.chunking.base import Chunk
 from app.services.retrieval.base import BaseRetriever
@@ -20,6 +21,7 @@ class HybridRetriever(BaseRetriever):
         
         # Only use sparse if it has chunks indexed
         if len(self.sparse_retriever.chunks) == 0:
+            logging.warning("BM25 has no indexed chunks — falling back to dense-only retrieval")
             return dense_results
             
         sparse_results = self.sparse_retriever.search(query, top_k)
@@ -46,10 +48,9 @@ class HybridRetriever(BaseRetriever):
 
         return merged_results[:top_k]
 
+    def index(self, chunks: List[Chunk]) -> None:
+        if hasattr(self.sparse_retriever, "index"):
+            self.sparse_retriever.index(chunks)
+
     def get_config(self) -> Dict[str, Any]:
-        return {
-            "strategy": "hybrid",
-            "alpha": self.alpha,
-            "dense_retriever": self.dense_retriever.get_config() if hasattr(self.dense_retriever, "get_config") else {},
-            "sparse_retriever": self.sparse_retriever.get_config() if hasattr(self.sparse_retriever, "get_config") else {},
-        }
+        return {"alpha": self.alpha}

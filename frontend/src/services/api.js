@@ -1,8 +1,7 @@
 import axios from "axios";
 
-const BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
-
-const api = axios.create({ baseURL: BASE });
+export const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const api = axios.create({ baseURL: BASE_URL });
 
 // ── Documents ──────────────────────────────────────────────────
 export const uploadDocument = (formData, onProgress) =>
@@ -19,10 +18,12 @@ export const getChunks = (docId, configId) =>
 
 // ── Config ──────────────────────────────────────────────────────
 export const saveConfig  = (cfg)      => api.post("/api/config", cfg);
-export const listConfigs = ()         => api.get("/api/config/list");
 
 // ── Compare ─────────────────────────────────────────────────────
-export const compareConfigs = (payload) => api.post("/api/compare", payload);
+export const compareConfigs = (payload) => api.post("/compare/run", payload);
+export const compareIndex = (payload) => api.post("/compare/index", payload);
+export const clearChromaDb = () => api.post("/compare/clear-chromadb");
+export const scoreMessage = (messageId) => api.post("/api/evaluation/score", { message_id: messageId });
 
 // ── MOCK DATA (delete once backend is ready) ────────────────────
 export const MOCK_CHUNKS = [
@@ -45,25 +46,31 @@ export const MOCK_CHUNKS = [
 
 export const MOCK_COMPARE_RESULTS = [
   {
-    configId: "cfg1", configName: "Fast — Small Chunks",
-    params: { strategy: "fixed_size", chunk_size: 256, overlap: 20, model: "nomic", top_k: 3 },
-    answer: "Alice was bored sitting by the riverbank with her sister.",
-    metrics: { response_time_ms: 820, chunks_retrieved: 3, avg_similarity: 0.81, token_count: 310 },
-    chunks: [MOCK_CHUNKS[0]],
+    config: { name: "Broad Recall", chunk_strategy: "fixed", embedding_model: "nvidia", top_k: 8, threshold: 0.3, collection_name: "nvidia_fixed" },
+    answer: "RAG combines retrieval from a knowledge base with generation from an LLM.",
+    chunks: [MOCK_CHUNKS[0].text, MOCK_CHUNKS[1].text],
+    scores: [0.91, 0.87],
+    latency_ms: 820,
+    avg_similarity: 0.89,
+    chunk_count: 2,
   },
   {
-    configId: "cfg2", configName: "Balanced",
-    params: { strategy: "fixed_size", chunk_size: 512, overlap: 50, model: "mxbai", top_k: 5 },
-    answer: "Alice sat by the river, bored, with no interesting book in sight.",
-    metrics: { response_time_ms: 1200, chunks_retrieved: 5, avg_similarity: 0.86, token_count: 430 },
-    chunks: [MOCK_CHUNKS[0], MOCK_CHUNKS[1]],
+    config: { name: "Precision Focus", chunk_strategy: "semantic", embedding_model: "huggingface", top_k: 3, threshold: 0.7, collection_name: "huggingface_semantic" },
+    answer: "RAG retrieves relevant chunks and then grounds model output in that context.",
+    chunks: [MOCK_CHUNKS[2].text],
+    scores: [0.93],
+    latency_ms: 1200,
+    avg_similarity: 0.93,
+    chunk_count: 1,
   },
   {
-    configId: "cfg3", configName: "Accurate — Semantic",
-    params: { strategy: "semantic", chunk_size: 1024, overlap: 100, model: "openai", top_k: 7 },
-    answer: "Alice was growing tired of sitting beside her sister near the bank, having nothing to read or do.",
-    metrics: { response_time_ms: 2100, chunks_retrieved: 7, avg_similarity: 0.91, token_count: 580 },
-    chunks: MOCK_CHUNKS,
+    config: { name: "Balanced", chunk_strategy: "recursive", embedding_model: "google", top_k: 5, threshold: 0.5, collection_name: "google_recursive" },
+    answer: "RAG improves factuality by requiring answers to be based on retrieved evidence.",
+    chunks: [MOCK_CHUNKS[0].text, MOCK_CHUNKS[2].text],
+    scores: [0.89, 0.84],
+    latency_ms: 2100,
+    avg_similarity: 0.865,
+    chunk_count: 2,
   },
 ];
 export const sendMessage = (payload) => api.post("/api/chat/", payload);

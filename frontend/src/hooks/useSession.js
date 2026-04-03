@@ -2,24 +2,25 @@ import { useCallback, useEffect, useState } from "react";
 
 const STORAGE_KEY = "rag_lab_session";
 
-function readSession() {
+const EMPTY_SESSION = { docId: null, configId: null, filename: null };
+
+function loadInitialSession() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { docId: null, configId: null, filename: null };
-
+    if (!raw) return EMPTY_SESSION;
     const parsed = JSON.parse(raw);
     return {
-      docId: parsed?.docId ?? null,
-      configId: parsed?.configId ?? null,
-      filename: parsed?.filename ?? null,
+      docId: parsed?.docId || null,
+      configId: parsed?.configId || null,
+      filename: parsed?.filename || null,
     };
   } catch {
-    return { docId: null, configId: null, filename: null };
+    return EMPTY_SESSION;
   }
 }
 
 export function useSession() {
-  const [session, setSession] = useState(readSession);
+  const [session, setSession] = useState(loadInitialSession);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(session));

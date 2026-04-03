@@ -1,4 +1,5 @@
 import logging
+import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,6 +10,12 @@ from app.api.chat import router as chat_router
 from app.api.config import router as config_router
 from app.api.analysis import router as analysis_router
 from app.api.compare import router as compare_router
+from app.api.evaluation import router as evaluation_router
+from app.api.metrics import router as metrics_router
+from app.compare.router import router as compare_module_router
+
+# Suppress noisy Chroma telemetry errors (version mismatch with posthog)
+logging.getLogger("chromadb.telemetry.product.posthog").setLevel(logging.CRITICAL)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -43,6 +50,9 @@ app.include_router(chat_router)
 app.include_router(config_router)
 app.include_router(analysis_router)
 app.include_router(compare_router)
+app.include_router(evaluation_router)
+app.include_router(metrics_router)
+app.include_router(compare_module_router)
 
 # Define root health check purely optionally
 @app.get("/")

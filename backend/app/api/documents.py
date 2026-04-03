@@ -55,30 +55,35 @@ def preview_chunks(doc_id: uuid.UUID, config_id: Optional[uuid.UUID] = Query(Non
         
     try:
         from app.services.pipeline_factory import PipelineFactory
-        pipeline = PipelineFactory.create_pipeline(config.config_json)
+        
+        chunker_cfg = (config.config_json or {}).get("chunker", {})
+        embedder_cfg = (config.config_json or {}).get("embedder", {})
 
-        if not hasattr(pipeline, "chunker"):
-            raise HTTPException(status_code=500, detail="Pipeline missing chunker component.")
+        # For semantic chunking only, we need the embedder; skip it for everything else
+        strategy = chunker_cfg.get("type", "fixed_size")
+        if strategy == "semantic":
+            embedder = PipelineFactory.create_embedder(embedder_cfg)
+        else:
+            embedder = None
+
+        # Only create the chunker — no vectorstore, no LLM, no retriever
+        chunker = PipelineFactory.create_chunker(chunker_cfg, embedder=embedder)
 
         metadata = {"filename": doc.filename, "file_type": doc.file_type}
-        chunks = pipeline.chunker.chunk(doc.content, metadata)
+        chunks = chunker.chunk(doc.content, metadata)
 
-        # Enrich chunks with sequence numbers and overlap info for frontend
         enriched_chunks = []
         for idx, chunk in enumerate(chunks):
             chunk_dict = chunk.__dict__.copy() if hasattr(chunk, "__dict__") else dict(chunk)
-            # Convert UUID to string for JSON serialization
             if isinstance(chunk_dict.get("id"), uuid.UUID):
                 chunk_dict["id"] = str(chunk_dict["id"])
             chunk_dict["sequence_num"] = idx
 
-            # Calculate overlap with previous chunk
             if idx > 0:
                 prev_end = chunks[idx - 1].end_char
                 if chunk.start_char < prev_end:
                     chunk_dict["overlap_prev"] = prev_end - chunk.start_char
 
-            # Calculate overlap with next chunk
             if idx < len(chunks) - 1:
                 next_start = chunks[idx + 1].start_char
                 if chunk.end_char > next_start:

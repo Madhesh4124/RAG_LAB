@@ -15,4 +15,9 @@ dist/
 *.db
 *.sqlite
 chroma_data/
+chroma_db/
+chroma_store/
+backend/chroma_data/
+backend/chroma_db/
+backend/chroma_store/
 uploads/

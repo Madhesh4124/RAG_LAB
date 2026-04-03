@@ -8,7 +8,7 @@ chapter / section becomes its own chunk.
 import logging
 import re
 import uuid
-from typing import Any, Dict, List, Optional, Pattern, Tuple
+from typing import Any, Callable, Dict, List, Optional, Pattern, Tuple
 
 from app.services.chunking.base import BaseChunker, Chunk
 from app.services.chunking.fixed_size import FixedSizeChunker
@@ -65,9 +65,10 @@ class ChapterChunker(BaseChunker):
     def __init__(
         self,
         heading_patterns: List[str] | None = None,
-        max_chunk_size: Optional[int] = None,
+        max_chunk_size: Optional[int] = 1024,
         fallback_chunker: Optional[BaseChunker] = None,
-        overlap_lines: int = 0,
+        overlap_lines: int = 1,
+        length_function: Callable[[str], int] = len,
         debug: bool = False,
     ) -> None:
         if heading_patterns is not None and len(heading_patterns) == 0:
@@ -86,6 +87,7 @@ class ChapterChunker(BaseChunker):
         self.max_chunk_size = max_chunk_size
         self.fallback_chunker = fallback_chunker
         self.overlap_lines = overlap_lines
+        self.length_fn = length_function
         self.debug = debug
 
     # ------------------------------------------------------------------
@@ -184,7 +186,7 @@ class ChapterChunker(BaseChunker):
         metadata: Dict[str, Any],
     ) -> List[Chunk]:
         """Split oversized chapter chunks while preserving offsets."""
-        if not self.max_chunk_size or len(chunk_text) <= self.max_chunk_size:
+        if not self.max_chunk_size or self.length_fn(chunk_text) <= self.max_chunk_size:
             single = self._emit_chunk(chunk_text, start_char, metadata.copy())
             return [single] if single else []
 
@@ -205,11 +207,11 @@ class ChapterChunker(BaseChunker):
             while j < len(lines):
                 line = lines[j]
 
-                if current_lines and (current_len + len(line)) > self.max_chunk_size:
+                if current_lines and (current_len + self.length_fn(line)) > self.max_chunk_size:
                     break
 
                 # Force progress for single very-long lines.
-                if not current_lines and len(line) > self.max_chunk_size:
+                if not current_lines and self.length_fn(line) > self.max_chunk_size:
                     piece = line[: self.max_chunk_size]
                     chunk = self._emit_chunk(piece, rolling_start, metadata.copy())
                     if chunk:
@@ -219,7 +221,7 @@ class ChapterChunker(BaseChunker):
                     continue
 
                 current_lines.append(line)
-                current_len += len(line)
+                current_len += self.length_fn(line)
                 j += 1
 
             if current_lines:
@@ -360,9 +362,22 @@ class ChapterChunker(BaseChunker):
 
         chunks = [c for c in chunks if c.text and c.text.strip()]
 
-        # Fallback when heading detection is ineffective.
-        if len(chunks) <= 1 or headings_found == 0:
-            return self._apply_fallback(text=text, metadata=metadata)
+        # Fallback only when heading detection found nothing at all.
+        # Producing a single chapter-sized chunk is a valid outcome and
+        # should not trigger a re-chunk via fixed-size splitting.
+        if headings_found == 0:
+            # Only engage the fallback chunker if the text is genuinely too
+            # large to be returned as one chunk.  Short heading-free documents
+            # are emitted as a single chunk without any re-chunking.
+            if self.max_chunk_size and self.length_fn(text) > self.max_chunk_size:
+                return self._apply_fallback(text=text, metadata=metadata)
+            # Short document: emit as one chunk.
+            single = self._emit_chunk(
+                text,
+                0,
+                self._build_metadata(metadata, None, None, 0),
+            )
+            return [single] if single else []
 
         return chunks
 
@@ -378,6 +393,7 @@ class ChapterChunker(BaseChunker):
             "heading_patterns": self._raw_patterns,
             "max_chunk_size": self.max_chunk_size,
             "overlap_lines": self.overlap_lines,
+            "length_function": getattr(self.length_fn, "__name__", repr(self.length_fn)),
             "fallback_chunker": (
                 self.fallback_chunker.__class__.__name__
                 if self.fallback_chunker is not None

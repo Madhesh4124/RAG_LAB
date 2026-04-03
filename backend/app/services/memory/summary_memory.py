@@ -48,6 +48,15 @@ class SummaryMemory(BaseMemory):
             
         return "\n\n".join(context_parts)
         
+    def get(self) -> list:
+        history = []
+        if self.summary:
+            history.append({"role": "system", "content": f"Historical Conversation Summary:\n{self.summary}"})
+        for entry in self.buffer:
+            history.append({"role": "user", "content": entry.query})
+            history.append({"role": "assistant", "content": entry.response})
+        return history
+        
     def clear(self) -> None:
         self.buffer.clear()
         self.summary = ""

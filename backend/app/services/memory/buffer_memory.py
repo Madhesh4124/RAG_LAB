@@ -20,6 +20,13 @@ class BufferMemory(BaseMemory):
             context_parts.append(f"Turn {i}:\nUser: {entry.query}\nAssistant: {entry.response}")
         return "\n\n".join(context_parts)
         
+    def get(self) -> list:
+        history = []
+        for entry in self.buffer:
+            history.append({"role": "user", "content": entry.query})
+            history.append({"role": "assistant", "content": entry.response})
+        return history
+        
     def clear(self) -> None:
         self.buffer.clear()
         

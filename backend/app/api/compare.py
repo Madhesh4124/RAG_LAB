@@ -9,6 +9,8 @@ from sqlalchemy import select
 from app.database import get_db
 from app.models.document import Document
 from app.models.rag_config import RAGConfig
+from app.models.chat import ChatMessage
+from app.models.metrics import Metrics
 from app.services.pipeline_factory import PipelineFactory
 from app.utils.timing import PipelineTimer
 
@@ -141,9 +143,49 @@ def compare_configs(
                     for chunk in retrieved_chunks[:3]  # Include first 3 chunks
                 ],
             }
+
+            timings = timer.to_metrics_dict() if hasattr(timer, "to_metrics_dict") else timer.get_timings()
+            if retrieved_results and isinstance(retrieved_results[0], tuple):
+                chunk_scores = [float(item[1]) for item in retrieved_results if isinstance(item, tuple) and len(item) == 2]
+            else:
+                chunk_scores = [float(getattr(chunk, "score", 0.0)) for chunk in retrieved_chunks]
+            avg_similarity_for_db = (sum(chunk_scores) / len(chunk_scores)) if chunk_scores else 0.0
+
+            assistant_msg = ChatMessage(
+                document_id=document_id,
+                config_id=config.id,
+                role="assistant",
+                content=answer,
+                retrieved_chunks=[
+                    {
+                        "id": str(getattr(chunk, "id", idx)),
+                        "text": getattr(chunk, "text", str(chunk)),
+                        "score": float(chunk_scores[idx]) if idx < len(chunk_scores) else 0.0,
+                    }
+                    for idx, chunk in enumerate(retrieved_chunks)
+                ],
+            )
+            db.add(assistant_msg)
+            db.flush()
+
+            metrics_record = Metrics(
+                message_id=assistant_msg.id,
+                chunking_time_ms=timings["chunking_time_ms"],
+                embedding_time_ms=timings.get("embedding_time_ms", 0),
+                retrieval_time_ms=timings["retrieval_time_ms"],
+                llm_time_ms=timings["llm_time_ms"],
+                total_time_ms=timings["total_time_ms"],
+                avg_similarity=avg_similarity_for_db,
+                token_count=len(answer.split()),
+            )
+            db.add(metrics_record)
+            db.commit()
+
+            result["message_id"] = str(assistant_msg.id)
             results.append(result)
             
         except Exception as e:
+            db.rollback()
             # Include error result for this config
             results.append({
                 "configId": str(config.id),

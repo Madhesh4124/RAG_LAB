@@ -37,6 +37,7 @@ class RAGPipeline:
         memory: Optional[BaseMemory] = None,
         retriever: Optional[BaseRetriever] = None,
         llm_client: Optional[GeminiClient] = None,
+        reranker: Optional[Any] = None,
     ) -> None:
         self.chunker = chunker
         self.embedder = embedder
@@ -44,11 +45,20 @@ class RAGPipeline:
         self.memory = memory
         self.retriever = retriever
         self.llm_client = llm_client
+        self.reranker = reranker
         self.timer = PipelineTimer()
+        self._indexed_doc_ids = set()
 
     def index_document(self, text: str, doc_id: str, metadata: dict) -> None:
         """Processes a document and indexes it into the vector store.
         """
+        if doc_id in self._indexed_doc_ids:
+            return
+
+        self.last_document_text = text
+        self.last_document_id = doc_id
+        self.last_document_metadata = metadata.copy() if metadata else {}
+            
         self.timer.reset()
         
         enriched_metadata = metadata.copy() if metadata else {}
@@ -70,10 +80,14 @@ class RAGPipeline:
         chunks = self.chunker.chunk(text=text, metadata=enriched_metadata)
         self.timer.stop("chunking_time_ms")
 
+        if hasattr(self.retriever, "index"):
+            self.retriever.index(chunks)
+
         # 2. Embed and store the chunks (Timed)
         self.timer.start("embedding_time_ms")
         self.vectorstore.add_chunks(chunks=chunks, embedder=self.embedder)
         self.timer.stop("embedding_time_ms")
+        self._indexed_doc_ids.add(doc_id)
 
     def retrieve(self, query: str, top_k: int = 5) -> List[Tuple[Chunk, float]]:
         """Retrieves chunks similar to the query.
@@ -89,6 +103,12 @@ class RAGPipeline:
             )
             
         self.timer.stop("retrieval_time_ms")
+        
+        if self.reranker:
+            self.timer.start("reranking_time_ms")
+            results = self.reranker.rerank(query, results, top_k)
+            self.timer.stop("reranking_time_ms")
+            
         return results
 
     def generate(self, query: str, chunks: List[Any], llm_client: Optional[GeminiClient] = None) -> str:
@@ -98,24 +118,43 @@ class RAGPipeline:
         target_llm = llm_client or self.llm_client
         
         if target_llm:
-            if self.memory and self.memory.get_context():
+            if self.memory and hasattr(self.memory, "get") and self.memory.get():
                 answer = target_llm.generate_with_memory(
                     query=query, 
                     chunks=chunks, 
-                    context=self.memory.get_context()
+                    memory=self.memory
                 )
             else:
                 answer = target_llm.generate(query=query, chunks=chunks)
         else:
-            # Fallback when no LLM client is set
-            answer = f"Simulated Response to Query: [{query}] mapped using attached memory."
+            answer = f"Simulated Response to Query: [{query}]"
         
-        # Keep sliding memory actively aware of the outbound reply context natively
         if self.memory:
             self.memory.add_interaction(query, answer)
             
         self.timer.stop("llm_time_ms")
         return answer
+
+    def generate_stream(self, query: str, chunks: List[Any], llm_client: Optional[GeminiClient] = None):
+        """Stream version of generate."""
+        target_llm = llm_client or self.llm_client
+        if not target_llm:
+            yield "LLM Client not initialized."
+            return
+
+        full_response = ""
+        if self.memory and hasattr(self.memory, "get") and self.memory.get():
+            iterator = target_llm.generate_stream_with_memory(query, chunks, self.memory)
+        else:
+            iterator = target_llm.generate_stream(query, chunks)
+
+        for chunk_text in iterator:
+            piece = chunk_text if isinstance(chunk_text, str) else str(chunk_text)
+            full_response += piece
+            yield piece
+
+        if self.memory:
+            self.memory.add_interaction(query, full_response)
         
     def get_last_timings(self) -> Dict[str, float]:
         """Returns the PipelineTimer's latest metrics dict spanning strictly active pipeline schema domains natively."""
@@ -135,5 +174,7 @@ class RAGPipeline:
             config["retriever"] = self.retriever.get_config() if hasattr(self.retriever, "get_config") else "custom_retriever"
         if self.llm_client:
             config["llm"] = self.llm_client.get_config() if hasattr(self.llm_client, "get_config") else "custom_llm"
+        if getattr(self, "reranker", None):
+            config["reranker"] = self.reranker.get_config() if hasattr(self.reranker, "get_config") else "custom_reranker"
             
         return config

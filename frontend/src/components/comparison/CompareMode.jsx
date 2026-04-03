@@ -8,19 +8,34 @@ export default function CompareMode({ documentId }) {
   const [results, setResults] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState(null);
+  const [configs, setConfigs] = useState([
+    { name: "Broad Recall", top_k: 8, threshold: 0.3 },
+    { name: "Precision Focus", top_k: 3, threshold: 0.7 },
+    { name: "Balanced", top_k: 5, threshold: 0.5 },
+  ]);
+
+  const updateConfig = (idx, patch) => {
+    setConfigs((prev) => prev.map((item, i) => (i === idx ? { ...item, ...patch } : item)));
+  };
 
   const handleRun = async () => {
     if (!query.trim() || !documentId) return;
     setLoading(true);
     setError(null);
     try {
-      const { data } = await compareConfigs({ document_id: documentId, query });
-      const resultList = data?.results || data;
-      setResults(Array.isArray(resultList) ? resultList : []);
+      const payload = {
+        query,
+        configs: configs.map((cfg) => ({
+          name: cfg.name,
+          top_k: Number(cfg.top_k),
+          threshold: Number(cfg.threshold),
+        })),
+      };
+      const { data } = await compareConfigs(payload);
+      setResults(Array.isArray(data?.results) ? data.results : []);
     } catch (e) {
       console.error(e);
       setError(e.response?.data?.detail || e.message || "Failed to compare configurations.");
-      // Keep UI usable in local/dev environments without compare backend wired yet.
       setResults(MOCK_COMPARE_RESULTS);
     } finally {
       setLoading(false);
@@ -51,7 +66,41 @@ export default function CompareMode({ documentId }) {
       </div>
 
       <div className="rounded-lg bg-amber-50 border border-amber-200 px-4 py-2 text-xs text-amber-700">
-        <span className="font-semibold">🔒 Controlled variables:</span> Same LLM, temperature, max context. Only chunking strategy, embedding model, and top-k vary.
+        <span className="font-semibold">🔒 Controlled variables:</span> Active dataset, chunking, and embeddings are locked. Only top-k and threshold vary.
+      </div>
+
+      <div className="rounded-xl border border-gray-200 bg-white p-4 space-y-3">
+        <p className="text-sm font-semibold text-gray-800">Retrieval Configurations</p>
+        <div className="grid gap-3 md:grid-cols-3">
+          {configs.map((cfg, idx) => (
+            <div key={cfg.name} className="rounded-lg border border-gray-200 p-3 space-y-2">
+              <p className="text-sm font-medium text-gray-700">{cfg.name}</p>
+              <label className="block text-xs text-gray-500">
+                top_k
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={cfg.top_k}
+                  onChange={(e) => updateConfig(idx, { top_k: e.target.value })}
+                  className="mt-1 w-full rounded border border-gray-300 px-2 py-1 text-sm"
+                />
+              </label>
+              <label className="block text-xs text-gray-500">
+                threshold
+                <input
+                  type="number"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={cfg.threshold}
+                  onChange={(e) => updateConfig(idx, { threshold: e.target.value })}
+                  className="mt-1 w-full rounded border border-gray-300 px-2 py-1 text-sm"
+                />
+              </label>
+            </div>
+          ))}
+        </div>
       </div>
 
       {error && (
@@ -67,7 +116,7 @@ export default function CompareMode({ documentId }) {
         <>
           <div className="grid gap-4 md:grid-cols-3">
             {results.map((result) => (
-              <ConfigCard key={result.configId} result={result} />
+              <ConfigCard key={result.config?.name} result={result} />
             ))}
           </div>
           <MetricsTable results={results} />
@@ -91,10 +140,9 @@ function MetricsTable({ results }) {
   };
 
   const metrics = [
-    { key: "response_time_ms", label: "Response Time",    format: formatMs,             best: "min" },
-    { key: "chunks_retrieved", label: "Chunks Retrieved", format: (v) => v,             best: null  },
-    { key: "avg_similarity",   label: "Avg Similarity",   format: (v) => v.toFixed(2),  best: "max" },
-    { key: "token_count",      label: "Tokens Used",      format: (v) => v,             best: "min" },
+    { key: "latency_ms", label: "Response Time",    format: formatMs,                  best: "min" },
+    { key: "chunk_count", label: "Chunks Retrieved", format: (v) => Number(v ?? 0),     best: null  },
+    { key: "avg_similarity", label: "Avg Similarity", format: (v) => Number(v ?? 0).toFixed(4), best: "max" },
   ];
 
   return (
@@ -104,24 +152,24 @@ function MetricsTable({ results }) {
           <tr>
             <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Metric</th>
             {results.map((r) => (
-              <th key={r.configId} className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">
-                {r.configName}
+              <th key={r.config?.name} className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">
+                {r.config?.name}
               </th>
             ))}
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-100">
           {metrics.map(({ key, label, format, best }) => {
-            const values = results.map((r) => r.metrics[key]);
+            const values = results.map((r) => Number(r[key] ?? 0));
             const bestVal = best === "min" ? Math.min(...values) : best === "max" ? Math.max(...values) : null;
             return (
               <tr key={key} className="hover:bg-gray-50">
                 <td className="px-4 py-3 text-gray-600 font-medium">{label}</td>
                 {results.map((r) => {
-                  const v = r.metrics[key];
+                  const v = Number(r[key] ?? 0);
                   const isBest = bestVal !== null && v === bestVal;
                   return (
-                    <td key={r.configId} className={`px-4 py-3 font-mono ${isBest ? "text-green-600 font-semibold" : "text-gray-700"}`}>
+                    <td key={`${r.config?.name}-${key}`} className={`px-4 py-3 font-mono ${isBest ? "text-green-600 font-semibold" : "text-gray-700"}`}>
                       {format(v)} {isBest && "✓"}
                     </td>
                   );

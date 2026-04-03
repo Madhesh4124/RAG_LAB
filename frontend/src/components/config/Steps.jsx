@@ -74,14 +74,31 @@ export function EmbeddingStep({ config, onChange }) {
 
 // ── RetrievalStep ────────────────────────────────────────────────
 export function RetrievalStep({ config, onChange }) {
+  const retrievalType = config.retrieval_type || config.type || "hybrid";
   const topK = config.top_k ?? 5;
   const similarityThreshold = config.similarity_threshold ?? 0.7;
+  const alpha = config.alpha ?? 0.7;
+  const lambdaMult = config.lambda_mult ?? 0.5;
 
   return (
     <div className="space-y-5">
       <div>
         <h2 className="text-lg font-semibold text-gray-800">Retrieval Parameters</h2>
-        <p className="text-sm text-gray-500">How many chunks to fetch and how strict the similarity filter is.</p>
+        <p className="text-sm text-gray-500">Select strategy and parameters.</p>
+      </div>
+
+      <div className="space-y-1">
+        <label className="text-sm font-medium text-gray-700">Retrieval Type</label>
+        <select
+          value={retrievalType}
+          onChange={(e) => onChange({ retrieval_type: e.target.value, type: e.target.value })}
+          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+        >
+          <option value="dense">Dense (vector similarity)</option>
+          <option value="sparse">Sparse (BM25 keyword)</option>
+          <option value="hybrid">Hybrid (fusion)</option>
+          <option value="mmr">MMR (Max Marginal Relevance)</option>
+        </select>
       </div>
 
       {/* Top-K */}
@@ -93,10 +110,11 @@ export function RetrievalStep({ config, onChange }) {
         <input type="range" min={1} max={10} step={1} value={topK}
           onChange={(e) => onChange({ top_k: Number(e.target.value) })}
           className="w-full accent-blue-600" />
-        <p className="text-xs text-gray-400">How many chunks to pass to the LLM</p>
+        <p className="text-xs text-gray-400">How many chunks to return</p>
       </div>
 
       {/* Similarity threshold */}
+      {retrievalType !== "sparse" && (
       <div className="space-y-1">
         <div className="flex justify-between text-sm">
           <span className="font-medium text-gray-700">Similarity Threshold</span>
@@ -107,11 +125,151 @@ export function RetrievalStep({ config, onChange }) {
           className="w-full accent-blue-600" />
         <p className="text-xs text-gray-400">Chunks below this score are discarded</p>
       </div>
+      )}
+
+      {/* Alpha */}
+      {retrievalType === "hybrid" && (
+      <div className="space-y-1">
+        <div className="flex justify-between text-sm">
+          <span className="font-medium text-gray-700">Alpha (Fusion Weight)</span>
+          <span className="text-blue-600 font-mono">{alpha}</span>
+        </div>
+        <input type="range" min={0.0} max={1.0} step={0.1} value={alpha}
+          onChange={(e) => onChange({ alpha: Number(e.target.value) })}
+          className="w-full accent-blue-600" />
+        <p className="text-xs text-gray-400">
+          Dense weight = {alpha}, Sparse weight = {(1 - alpha).toFixed(1)}
+        </p>
+      </div>
+      )}
+
+      {/* Lambda for MMR */}
+      {retrievalType === "mmr" && (
+      <div className="space-y-1">
+        <div className="flex justify-between text-sm">
+          <span className="font-medium text-gray-700">Lambda (MMR Trade-off)</span>
+          <span className="text-blue-600 font-mono">{lambdaMult}</span>
+        </div>
+        <input type="range" min={0.0} max={1.0} step={0.1} value={lambdaMult}
+          onChange={(e) => onChange({ lambda_mult: Number(e.target.value) })}
+          className="w-full accent-blue-600" />
+        <div className="flex justify-between text-xs text-gray-400">
+          <span>Max Diversity</span>
+          <span>Max Relevance</span>
+        </div>
+      </div>
+      )}
+
+      {/* Reranker */}
+      <div className="space-y-3 pt-4 border-t border-gray-100">
+        <label className="flex items-center space-x-2 cursor-pointer">
+          <input type="checkbox" checked={config.reranker_enabled || false}
+             onChange={(e) => onChange({ reranker_enabled: e.target.checked })}
+             className="accent-blue-600 rounded text-blue-600 w-4 h-4" />
+         <span className="text-sm font-medium text-gray-700">Enable API Reranker</span>
+        </label>
+        {config.reranker_enabled && (
+           <div className="space-y-1 pl-6">
+           <label className="text-xs font-medium text-gray-600">Reranker Model (Hosted)</label>
+             <select
+             value={config.reranker_model || "BAAI/bge-reranker-base"}
+             onChange={(e) => onChange({ reranker_provider: "huggingface_api", reranker_model: e.target.value })}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+             >
+             <option value="BAAI/bge-reranker-large">BAAI/bge-reranker-large (Best quality)</option>
+                <option value="BAAI/bge-reranker-base">BAAI/bge-reranker-base (Accurate)</option>
+             </select>
+           </div>
+        )}
+      </div>
 
       {/* Summary box */}
       <div className="rounded-lg bg-gray-50 border border-gray-200 p-3 text-xs text-gray-600 space-y-1">
         <p className="font-semibold text-gray-700">📋 Config Summary</p>
-        <p>Will retrieve up to <strong>{topK} chunks</strong> with similarity ≥ <strong>{similarityThreshold}</strong></p>
+        <p>Using <strong>{retrievalType}</strong> retrieval. Will select up to <strong>{topK} chunks</strong>.</p>
+      </div>
+    </div>
+  );
+}
+
+// ── LLMStep ──────────────────────────────────────────────────
+export function LLMStep({ config, memoryConfig, onLLMChange, onMemoryChange }) {
+  const memoryType = memoryConfig.type || "buffer";
+  const maxTurns = memoryConfig.max_turns ?? 5;
+  const maxTurnsBeforeSummary = memoryConfig.max_turns_before_summary ?? 5;
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-lg font-semibold text-gray-800">LLM & Memory</h2>
+        <p className="text-sm text-gray-500">Configure response generation and conversation recall.</p>
+      </div>
+
+      {/* LLM Model */}
+      <div className="rounded-xl border border-gray-200 bg-white p-4 space-y-3">
+        <label className="text-sm font-medium text-gray-700">Model</label>
+        <select
+          value={config.model}
+          onChange={(e) => onLLMChange({ model: e.target.value })}
+          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+        >
+          <option value="gemma-4-26b-a4b-it">Gemma 4 26B A4B IT (Balanced)</option>
+          <option value="gemini-2.0-pro-exp-02-05">Gemini 2.0 Pro (Sophisticated)</option>
+        </select>
+        <p className="text-xs text-gray-400">The model used for answer synthesis.</p>
+      </div>
+
+      {/* Memory Configuration */}
+      <div className="rounded-xl border border-gray-200 bg-white p-4 space-y-4">
+        <label className="text-sm font-medium text-gray-700">Memory Type</label>
+        <select
+          value={memoryType}
+          onChange={(e) => onMemoryChange({ type: e.target.value })}
+          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+        >
+          <option value="none">None (No session recall)</option>
+          <option value="buffer">Buffer (Fixed recent turns)</option>
+          <option value="summary">Summary (Long-term compression)</option>
+        </select>
+
+        {memoryType === "buffer" && (
+          <div className="space-y-1">
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-600">Max Recall Turns</span>
+              <span className="text-blue-600 font-mono">{maxTurns}</span>
+            </div>
+            <input 
+              type="range" min={1} max={20} step={1} 
+              value={maxTurns}
+              onChange={(e) => onMemoryChange({ max_turns: Number(e.target.value) })}
+              className="w-full accent-blue-600" 
+            />
+          </div>
+        )}
+
+        {memoryType === "summary" && (
+          <div className="space-y-1">
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-600">Summary Frequency (turns)</span>
+              <span className="text-blue-600 font-mono">{maxTurnsBeforeSummary}</span>
+            </div>
+            <input 
+              type="range" min={2} max={10} step={1} 
+              value={maxTurnsBeforeSummary}
+              onChange={(e) => onMemoryChange({ max_turns_before_summary: Number(e.target.value) })}
+              className="w-full accent-blue-600" 
+            />
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-lg bg-blue-50 border border-blue-100 p-3 flex items-start space-x-2">
+        <span className="text-blue-500 text-sm">💡</span>
+        <p className="text-xs text-blue-700">
+          {memoryType === "buffer" ? "Buffer memory keeps the exact text of the last few turns." : 
+           memoryType === "summary" ? "Summary memory compresses old turns into a brief context." : 
+           "No memory means every question is treated in isolation."}
+        </p>
       </div>
     </div>
   );

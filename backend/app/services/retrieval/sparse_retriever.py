@@ -1,6 +1,6 @@
 """Sparse BM25 Retriever implementation."""
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Optional
 from rank_bm25 import BM25Okapi
 
 from app.services.chunking.base import Chunk
@@ -9,13 +9,18 @@ from app.services.retrieval.base import BaseRetriever
 class BM25Retriever(BaseRetriever):
     """BM25 sparse retriever."""
 
-    def __init__(self, chunks: List[Chunk]):
-        self.chunks = chunks
+    def __init__(self, chunks: Optional[List[Chunk]] = None):
+        self.chunks = []
+        self.bm25 = None
         
-        if not self.chunks:
-            self.bm25 = None
+        if chunks:
+            self.index(chunks)
+
+    def index(self, chunks: List[Chunk]) -> None:
+        if not chunks:
             return
             
+        self.chunks.extend(chunks)
         # Tokenize by splitting on whitespace
         tokenized_corpus = [chunk.text.split() for chunk in self.chunks]
         self.bm25 = BM25Okapi(tokenized_corpus)

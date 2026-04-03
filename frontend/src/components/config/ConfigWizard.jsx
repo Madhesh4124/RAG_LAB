@@ -4,16 +4,16 @@ import { useSession }   from "../../hooks/useSession";
 import DocumentUpload   from "../upload/DocumentUpload";
 import PresetSelector   from "./PresetSelector";
 import ChunkingStep     from "./ChunkingStep";
-import { EmbeddingStep, RetrievalStep } from "./Steps";
+import { EmbeddingStep, RetrievalStep, LLMStep } from "./Steps";
 import { Button, StepIndicator } from "../common/index";
 import { useNavigate } from "react-router-dom";
 import { saveConfig } from "../../services/api";
 
-const STEP_LABELS = ["Upload", "Chunking", "Embedding", "Retrieval"];
+const STEP_LABELS = ["Upload", "Chunking", "Embedding", "Retrieval", "LLM & Memory"];
 
 export default function ConfigWizard() {
   const navigate = useNavigate();
-  const { config, step, updateChunking, updateEmbedding, updateRetrieval, applyPreset, nextStep, prevStep } = useConfig();
+  const { config, step, updateChunking, updateEmbedding, updateRetrieval, updateLLM, updateMemory, applyPreset, nextStep, prevStep } = useConfig();
   const { document, upload, uploading, uploadProgress, clearDocument } = useDocument();
   const { setDocId, setConfigId, setFilename } = useSession();
 
@@ -28,7 +28,13 @@ export default function ConfigWizard() {
         embedder:    config.embedder,
         vectorstore: config.vectorstore,
         retriever:   config.retriever,
-        llm:         { provider: "gemini", model: "gemini-2.5-flash" },
+        reranker:    {
+          enabled: config.retriever.reranker_enabled || false,
+          provider: config.retriever.reranker_provider || "huggingface_api",
+          model: config.retriever.reranker_model || "BAAI/bge-reranker-base",
+        },
+        llm:         { ...config.llm },
+        memory:      config.memory.type === "none" ? {} : config.memory,
       };
       const { data } = await saveConfig({
         document_id: document.id,
@@ -49,6 +55,7 @@ export default function ConfigWizard() {
     <ChunkingStep    config={config.chunker}      onChange={updateChunking} />,
     <EmbeddingStep   config={config.embedder}     onChange={updateEmbedding} />,
     <RetrievalStep   config={config.retriever}    onChange={updateRetrieval} />,
+    <LLMStep         config={config.llm}          memoryConfig={config.memory} onLLMChange={updateLLM} onMemoryChange={updateMemory} />,
   ];
 
   return (

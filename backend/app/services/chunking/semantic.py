@@ -10,7 +10,7 @@ import logging
 import re
 import uuid
 from math import sqrt
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from app.services.chunking.base import BaseChunker, Chunk
 from app.services.embedding.base import BaseEmbedder
@@ -32,7 +32,8 @@ class SemanticChunker(BaseChunker):
     the current chunk centroid embedding.
 
     Args:
-        max_chunk_size: Maximum number of characters allowed in a chunk.
+        max_chunk_size: Maximum size of a chunk as measured by
+            ``length_function``.
         embedder: Embedding backend used for semantic similarity.
         similarity_threshold: Primary semantic split threshold.
         min_chunk_size: Minimum chunk size before allowing soft splits.
@@ -40,6 +41,9 @@ class SemanticChunker(BaseChunker):
         overlap_sentences: Number of trailing sentences to overlap.
         hard_split_threshold: Forced semantic split threshold.
         smoothing_margin: Margin reducing noisy near-threshold splits.
+        length_function: Callable used to measure text length.  Defaults
+            to ``len`` (character count).  Pass a token-counting wrapper
+            for token-aware chunking.
         debug: Enables split-decision debug logs.
         require_embedder: Raise when embedder is missing.
 
@@ -51,13 +55,14 @@ class SemanticChunker(BaseChunker):
         self,
         max_chunk_size: int = 512,
         embedder: Optional[BaseEmbedder] = None,
-        similarity_threshold: float = 0.6,
+        similarity_threshold: float = 0.7,
         min_chunk_size: int = 100,
         use_centroid: bool = True,
-        overlap_sentences: int = 0,
+        overlap_sentences: int = 1,
         hard_split_threshold: Optional[float] = 0.4,
         max_sentences_per_chunk: Optional[int] = None,
         smoothing_margin: float = 0.05,
+        length_function: Callable[[str], int] = len,
         debug: bool = False,
         require_embedder: bool = True,
     ) -> None:
@@ -99,6 +104,7 @@ class SemanticChunker(BaseChunker):
         self.hard_split_threshold = hard_split_threshold
         self.max_sentences_per_chunk = max_sentences_per_chunk
         self.smoothing_margin = smoothing_margin
+        self.length_fn = length_function
         self.debug = debug
         self.require_embedder = require_embedder
 
@@ -202,34 +208,73 @@ class SemanticChunker(BaseChunker):
 
     @staticmethod
     def _locate_sentences(text: str, sentences: List[str]) -> List[Tuple[int, int]]:
-        """Locate sentence start/end offsets in order within the original text."""
+        """Locate sentence start/end offsets in order within the original text.
+
+        Uses a forward regex search that flexibly matches internal whitespace,
+        ensuring a strictly increasing cursor and immunity to the
+        repeated-sentence offset bug.
+
+        Args:
+            text: The full original document text.
+            sentences: Ordered list of sentence strings to locate.
+
+        Returns:
+            A list of ``(start, end)`` tuples, one per located sentence.
+            Sentences that cannot be found are skipped (the list may therefore
+            be shorter than *sentences* in degenerate inputs).
+        """
         spans: List[Tuple[int, int]] = []
         cursor = 0
+
         for sentence in sentences:
-            start = text.find(sentence, cursor)
-            if start == -1:
-                start = text.find(sentence)
-                if start == -1:
-                    continue
-            end = start + len(sentence)
-            spans.append((start, end))
-            cursor = end
+            # Build a flexible pattern that matches any internal whitespace run
+            # so that multi-space gaps don't cause a miss.
+            escaped = re.escape(sentence)
+            flexible_pattern = escaped.replace(r"\ ", r"\s+")
+            m = re.search(flexible_pattern, text[cursor:])
+
+            if m:
+                start = cursor + m.start()
+                end = cursor + m.end()
+                spans.append((start, end))
+                cursor = end  # strictly advance — prevents repeated-sentence bug
+                continue
+
+            # Strict fallback: plain substring search, still forward-only.
+            idx = text.find(sentence, cursor)
+            if idx != -1:
+                end = idx + len(sentence)
+                spans.append((idx, end))
+                cursor = end
+            # If neither search succeeds, skip this sentence.
+
         return spans
 
     @staticmethod
     def _chunk_text(sentences: List[str], start_idx: int, end_idx: int) -> str:
         return " ".join(sentences[start_idx : end_idx + 1])
 
-    @staticmethod
-    def _chunk_char_length(sentences: List[str], start_idx: int, end_idx: int) -> int:
-        if end_idx < start_idx:
+    def _chunk_span_length(
+        self,
+        spans: List[Tuple[int, int]],
+        start_idx: int,
+        end_idx: int,
+    ) -> int:
+        """Return the exact character span covered by sentences[start_idx:end_idx+1].
+
+        Uses precomputed *spans* (from ``_locate_sentences``) so the length
+        reflects the true gap between the first and last sentence in the
+        original text, including any multi-whitespace separators.
+
+        This replaces the old ``_chunk_char_length`` helper which summed
+        sentence lengths and added 1 per gap — an approximation that caused
+        the "whitespace drift" bug on documents with irregular spacing.
+        """
+        if end_idx < start_idx or not spans:
             return 0
-        length = 0
-        for idx in range(start_idx, end_idx + 1):
-            length += len(sentences[idx])
-            if idx > start_idx:
-                length += 1
-        return length
+        end_idx = min(end_idx, len(spans) - 1)
+        start_idx = max(start_idx, 0)
+        return spans[end_idx][1] - spans[start_idx][0]
 
     def _should_split(
         self,
@@ -238,7 +283,16 @@ class SemanticChunker(BaseChunker):
         split_for_size: bool,
         split_for_span: bool,
     ) -> Tuple[bool, str]:
-        """Decide whether to split and return reason for observability/debugging."""
+        """Decide whether to split and return reason for observability/debugging.
+
+        Note on ``hard_split_threshold``:
+            A *hard* semantic split fires unconditionally — it intentionally
+            bypasses ``min_chunk_size``.  This is by design so that strongly
+            off-topic sentences always start a new chunk regardless of how
+            short the current one is.  If noisy embeddings cause unwanted
+            micro-chunks, either raise ``hard_split_threshold`` or set it
+            to ``None`` to disable hard splits entirely.
+        """
         current_too_small = current_chunk_len < self.min_chunk_size
 
         hard_split = False
@@ -297,17 +351,26 @@ class SemanticChunker(BaseChunker):
         if not sentences:
             return []
 
+        # _locate_sentences now uses forward regex search — immune to the
+        # repeated-sentence offset bug and the whitespace-drift bug.
         spans = self._locate_sentences(text, sentences)
+
         if len(spans) != len(sentences):
-            # Safety fallback when offsets cannot be recovered reliably.
+            # Safety fallback: rebuild spans sequentially when locate fails.
+            logger.warning(
+                "SemanticChunker: could not locate all sentences (%d/%d). "
+                "Using sequential fallback spans.",
+                len(spans),
+                len(sentences),
+            )
             spans = []
             cursor = 0
             for sentence in sentences:
-                start = text.find(sentence, cursor)
-                if start == -1:
-                    start = max(0, cursor)
-                end = min(len(text), start + len(sentence))
-                spans.append((start, end))
+                idx = text.find(sentence, cursor)
+                if idx == -1:
+                    idx = max(0, cursor)
+                end = min(len(text), idx + len(sentence))
+                spans.append((idx, end))
                 cursor = end
 
         if self.embedder is None:
@@ -324,7 +387,16 @@ class SemanticChunker(BaseChunker):
 
         chunks: List[Chunk] = []
         chunk_start_idx = 0
-        current_length = len(sentences[0])
+
+        # Precompute per-sentence token/char lengths once to avoid repeated
+        # calls to length_fn on growing slices (O(n) instead of O(n²)).
+        sentence_token_lengths = [self.length_fn(s) for s in sentences]
+
+        # Fix: pass an actual text slice to length_fn, not a raw integer.
+        if spans:
+            current_length = self.length_fn(text[spans[0][0]:spans[0][1]])
+        else:
+            current_length = self.length_fn(sentences[0])
         current_sentence_count = 1
 
         running_centroid: Optional[List[float]] = None
@@ -337,8 +409,12 @@ class SemanticChunker(BaseChunker):
             )
 
         for i in range(1, len(sentences)):
-            sentence_len = len(sentences[i])
-            would_be_length = current_length + 1 + sentence_len
+            # Accumulate token/char length of the candidate window using
+            # precomputed per-sentence lengths.  This keeps the unit consistent
+            # with max_chunk_size regardless of whether length_fn counts chars
+            # or tokens, and avoids re-tokenizing the growing slice each step.
+            next_sentence_len = sentence_token_lengths[i]
+            would_be_length = current_length + next_sentence_len
             split_for_size = would_be_length > self.max_chunk_size
             split_for_span = (
                 self.max_sentences_per_chunk is not None
@@ -388,7 +464,9 @@ class SemanticChunker(BaseChunker):
 
                 new_start = max(0, i - self.overlap_sentences)
                 chunk_start_idx = new_start
-                current_length = self._chunk_char_length(sentences, chunk_start_idx, i)
+                # Recalculate exact length for the new overlap window using
+                # precomputed per-sentence lengths (no text re-tokenization).
+                current_length = sum(sentence_token_lengths[chunk_start_idx : i + 1])
 
                 current_sentence_count = i - chunk_start_idx + 1
                 if embeddings and self.use_centroid:
@@ -449,6 +527,7 @@ class SemanticChunker(BaseChunker):
             "hard_split_threshold": self.hard_split_threshold,
             "max_sentences_per_chunk": self.max_sentences_per_chunk,
             "smoothing_margin": self.smoothing_margin,
+            "length_function": getattr(self.length_fn, "__name__", repr(self.length_fn)),
             "require_embedder": self.require_embedder,
             "debug": self.debug,
             "embedder_model": self.embedder.model_name if self.embedder else None,

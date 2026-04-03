@@ -11,6 +11,7 @@ from app.services.chunking.base import BaseChunker
 from app.services.embedding.base import BaseEmbedder
 from app.services.vectorstore.base import BaseVectorStore
 from app.services.rag_pipeline import RAGPipeline
+from app.services.memory.base import BaseMemory
 
 
 class PipelineFactory:
@@ -39,10 +40,10 @@ class PipelineFactory:
             kwargs.pop("overlap", None)
             kwargs = {
                 "max_chunk_size": kwargs.get("max_chunk_size", 512),
-                "similarity_threshold": kwargs.get("similarity_threshold", 0.6),
+                "similarity_threshold": kwargs.get("similarity_threshold", 0.7),
                 "min_chunk_size": kwargs.get("min_chunk_size", 100),
                 "use_centroid": kwargs.get("use_centroid", True),
-                "overlap_sentences": kwargs.get("overlap_sentences", 0),
+                "overlap_sentences": kwargs.get("overlap_sentences", 1),
                 "hard_split_threshold": kwargs.get("hard_split_threshold", 0.4),
                 "max_sentences_per_chunk": kwargs.get("max_sentences_per_chunk"),
                 "smoothing_margin": kwargs.get("smoothing_margin", 0.05),
@@ -54,8 +55,8 @@ class PipelineFactory:
         if strategy in ("chapter", "chapter_based"):
             kwargs = {
                 "heading_patterns": kwargs.get("heading_patterns"),
-                "max_chunk_size": kwargs.get("max_chunk_size"),
-                "overlap_lines": kwargs.get("overlap_lines", 0),
+                "max_chunk_size": kwargs.get("max_chunk_size", 1024),
+                "overlap_lines": kwargs.get("overlap_lines", 1),
                 "debug": kwargs.get("debug", False),
             }
             if kwargs["heading_patterns"] is None:
@@ -66,8 +67,8 @@ class PipelineFactory:
                 "chunk_size": kwargs.get("chunk_size", 512),
                 "overlap": kwargs.get("overlap", 50),
                 "separators": kwargs.get("separators"),
-                "min_chunk_size": kwargs.get("min_chunk_size", 50),
-                "apply_overlap_recursively": kwargs.get("apply_overlap_recursively", False),
+                "min_chunk_size": kwargs.get("min_chunk_size", 100),
+                "apply_overlap_recursively": kwargs.get("apply_overlap_recursively", True),
                 "max_recursion_depth": kwargs.get("max_recursion_depth", 10),
                 "debug": kwargs.get("debug", False),
             }
@@ -83,6 +84,7 @@ class PipelineFactory:
         if strategy == "sentence_window":
             kwargs = {
                 "window_size": kwargs.get("window_size", 3),
+                "max_chunk_size": kwargs.get("max_chunk_size", 150),
             }
 
         if strategy == "fixed_size":
@@ -152,7 +154,7 @@ class PipelineFactory:
         if not config:
             return None
             
-        type_ = config.get("type")
+        type_ = config.get("retrieval_type", config.get("type", "hybrid"))
         
         if type_ == "hybrid":
             from app.services.retrieval.dense_retriever import DenseRetriever
@@ -175,6 +177,13 @@ class PipelineFactory:
             chunks = config.get("chunks", [])
             return BM25Retriever(chunks)
             
+        elif type_ == "mmr":
+            from app.services.retrieval.dense_retriever import DenseRetriever
+            from app.services.retrieval.mmr_retriever import MMRRetriever
+            dr = DenseRetriever(vectorstore, embedder)
+            lambda_mult = config.get("lambda_mult", 0.5)
+            return MMRRetriever(dense_retriever=dr, lambda_mult=lambda_mult)
+            
         else:
             return None
 
@@ -187,10 +196,39 @@ class PipelineFactory:
         provider = config.get("provider")
         if provider == "gemini":
             from app.services.llm.gemini_client import GeminiClient
-            model = config.get("model", "gemini-2.5-flash")
+            model = config.get("model", "gemma-4-26b-a4b-it")
             temperature = config.get("temperature", 0.2)
             return GeminiClient(model=model, temperature=temperature)
             
+        return None
+
+    @staticmethod
+    def create_memory(config: Dict[str, Any], llm_client: Any = None) -> Optional[BaseMemory]:
+        """Create a memory module dynamically based on the configuration."""
+        if not config:
+            return None
+            
+        type_ = config.get("type")
+        
+        if type_ == "buffer":
+            from app.services.memory.buffer_memory import BufferMemory
+            return BufferMemory(max_turns=config.get("max_turns", 5))
+            
+        elif type_ == "summary":
+            from app.services.memory.summary_memory import SummaryMemory
+            if llm_client and hasattr(llm_client, "llm") and llm_client.llm is not None:
+                def summarizer(text: str) -> str:
+                    return llm_client.llm.invoke(f"Summarize this conversation concisely:\n{text}").content
+                    
+                return SummaryMemory(
+                    max_turns_before_summary=config.get("max_turns_before_summary", 5),
+                    summarizer_fn=summarizer
+                )
+            else:
+                return SummaryMemory(
+                    max_turns_before_summary=config.get("max_turns_before_summary", 5)
+                )
+                
         return None
 
     @staticmethod
@@ -204,6 +242,9 @@ class PipelineFactory:
         Returns:
             A fully initialized RAGPipeline instance.
         """
+        llm_client = PipelineFactory.create_llm_client(config.get("llm", {}))
+        memory = PipelineFactory.create_memory(config.get("memory", {}), llm_client)
+
         chunker_cfg = config.get("chunker", {})
         embedder_cfg = config.get("embedder", {})
         vectorstore_cfg = config.get("vectorstore", {})
@@ -213,12 +254,37 @@ class PipelineFactory:
         vectorstore = PipelineFactory.create_vectorstore(vectorstore_cfg)
 
         retriever = PipelineFactory.create_retriever(config.get("retriever", {}), vectorstore, embedder)
-        llm_client = PipelineFactory.create_llm_client(config.get("llm", {}))
+
+        reranker = None
+        reranker_cfg = config.get("reranker")
+        if isinstance(reranker_cfg, dict) and reranker_cfg.get("enabled"):
+            provider = reranker_cfg.get("provider", "huggingface_api")
+            model_name = reranker_cfg.get("model", "BAAI/bge-reranker-base")
+            timeout_seconds = int(reranker_cfg.get("timeout_seconds", 10))
+            max_candidates = int(reranker_cfg.get("max_candidates", 8))
+            max_workers = int(reranker_cfg.get("max_workers", 4))
+
+            if provider in ("huggingface_api", "huggingface", "hf_api"):
+                from app.services.retrieval.reranker import HuggingFaceAPIReranker
+                reranker = HuggingFaceAPIReranker(
+                    model=model_name,
+                    timeout_seconds=timeout_seconds,
+                    max_candidates=max_candidates,
+                    max_workers=max_workers,
+                )
+            else:
+                from app.services.retrieval.reranker import CrossEncoderReranker
+                reranker = CrossEncoderReranker(model=model_name)
+        elif reranker_cfg is True:
+            from app.services.retrieval.reranker import HuggingFaceAPIReranker
+            reranker = HuggingFaceAPIReranker()
 
         return RAGPipeline(
             chunker=chunker,
             embedder=embedder,
             vectorstore=vectorstore,
+            memory=memory,
             retriever=retriever,
-            llm_client=llm_client
+            llm_client=llm_client,
+            reranker=reranker
         )

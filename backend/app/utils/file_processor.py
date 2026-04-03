@@ -1,6 +1,6 @@
 import os
 import io
-import PyPDF2
+import pypdf
 from fastapi import UploadFile
 
 class FileProcessor:
@@ -30,7 +30,7 @@ class FileProcessor:
         elif file_type == 'pdf':
             pdf_file = io.BytesIO(content_bytes)
             try:
-                pdf_reader = PyPDF2.PdfReader(pdf_file)
+                pdf_reader = pypdf.PdfReader(pdf_file)
                 text_parts = []
                 for page in pdf_reader.pages:
                     text = page.extract_text()

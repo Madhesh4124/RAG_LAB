@@ -20,6 +20,11 @@ class BaseMemory(abc.ABC):
         pass
         
     @abc.abstractmethod
+    def get(self) -> list:
+        """Returns structural conversation list for robust serialization."""
+        pass
+        
+    @abc.abstractmethod
     def clear(self) -> None:
         """Resets all stored memory."""
         pass

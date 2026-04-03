@@ -1,8 +1,10 @@
+import { useState } from "react";
+
 export default function MessageList({ messages }) {
-  const formatMs = (value) => {
-    const n = Number(value);
-    if (!Number.isFinite(n)) return "0ms";
-    return `${Math.round(n)}ms`;
+  const [expandedChunks, setExpandedChunks] = useState({});
+
+  const toggleChunks = (idx) => {
+    setExpandedChunks((prev) => ({ ...prev, [idx]: !prev[idx] }));
   };
 
   if (!messages.length) {
@@ -20,43 +22,71 @@ export default function MessageList({ messages }) {
     <div className="space-y-4">
       {messages.map((msg, i) => (
         <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-          <div className={`max-w-[75%] rounded-2xl px-4 py-3 text-sm
+          <div className={`max-w-[78%] rounded-2xl px-4 py-3 text-sm
             ${msg.role === "user"
               ? "bg-blue-600 text-white rounded-br-sm"
               : "bg-white border border-gray-200 text-gray-800 rounded-bl-sm shadow-sm"}`}>
-            <p className="leading-relaxed">{msg.content}</p>
+
+            {/* Status line shown while waiting */}
+            {msg.status && (
+              <div className="flex items-center gap-2 text-xs text-blue-500 mb-2">
+                <span className="inline-block w-2 h-2 bg-blue-400 rounded-full animate-pulse" />
+                {msg.status}
+              </div>
+            )}
+
+            {/* Answer text */}
+            {msg.content
+              ? <p className="leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+              : !msg.status && <p className="leading-relaxed text-gray-300 italic">Thinking…</p>
+            }
 
             {/* Retrieved chunks */}
             {msg.chunks?.length > 0 && (
               <div className="mt-3 pt-3 border-t border-gray-100 space-y-2">
-                <p className="text-xs text-gray-400 font-medium uppercase tracking-wide">
-                  Retrieved {msg.chunks.length} chunks
-                </p>
-                {msg.chunks.map((chunk, j) => (
-                  <div key={j} className="rounded-lg bg-gray-50 border border-gray-200 px-3 py-2">
-                    <div className="flex justify-between mb-1">
-                      <span className="text-xs font-mono text-gray-400">#{j + 1}</span>
-                      <span className="text-xs text-blue-500 font-medium">
-                        score: {chunk.score?.toFixed(3)}
-                      </span>
+                <button
+                  type="button"
+                  onClick={() => toggleChunks(i)}
+                  className="text-xs text-blue-600 hover:text-blue-700 font-medium"
+                >
+                  {expandedChunks[i] ? "Hide" : "Show"} Retrieved {msg.chunks.length} chunk{msg.chunks.length !== 1 ? "s" : ""}
+                </button>
+
+                {expandedChunks[i] && msg.chunks.map((chunk, j) => {
+                  const score = typeof chunk.score === "number" ? chunk.score : null;
+                  const scoreColor =
+                    score === null ? "text-gray-400"
+                    : score >= 0.75 ? "text-emerald-600 font-semibold"
+                    : score >= 0.5  ? "text-yellow-600"
+                    : "text-red-500";
+                  return (
+                    <div key={j} className="rounded-lg bg-gray-50 border border-gray-200 px-3 py-2 hover:border-blue-200 transition-colors">
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="text-xs font-mono text-gray-400">#{j + 1}</span>
+                        {score !== null && (
+                          <span className={`text-xs ${scoreColor}`}>
+                            {(score * 100).toFixed(1)}% match
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-gray-600 line-clamp-3 leading-relaxed">{chunk.text}</p>
                     </div>
-                    <p className="text-xs text-gray-600 line-clamp-2">{chunk.text}</p>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
 
             {/* Timings */}
-            {msg.timings && (
+            {msg.timings && Object.keys(msg.timings).length > 0 && (
               <div className="mt-3 pt-3 border-t border-gray-100">
-                <p className="text-xs text-gray-400 font-medium uppercase tracking-wide mb-2">
+                <p className="text-xs text-gray-400 font-semibold uppercase tracking-wide mb-2">
                   Pipeline Timings
                 </p>
-                <div className="grid grid-cols-2 gap-1">
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1">
                   {Object.entries(msg.timings).map(([key, val]) => (
                     <div key={key} className="flex justify-between text-xs">
                       <span className="text-gray-400">{key.replace("_ms", "").replace(/_/g, " ")}</span>
-                      <span className="font-mono text-gray-600">{formatMs(val)}</span>
+                      <span className="font-mono text-gray-600">{Math.round(Number(val))}ms</span>
                     </div>
                   ))}
                 </div>

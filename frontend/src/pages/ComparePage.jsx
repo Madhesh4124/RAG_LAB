@@ -1,3 +1,4 @@
+import React from 'react';
 import { useEffect, useMemo, useRef, useState } from "react";
 import { clearChromaDb, compareConfigs, compareIndex, uploadDocument } from "../services/api";
 import { useSession } from "../hooks/useSession";
@@ -8,32 +9,58 @@ import ConfigFormModal from "../components/compare/ConfigFormModal";
 import StagingPanel from "../components/compare/StagingPanel";
 import QueryInput from "../components/compare/QueryInput";
 import ResultsGrid from "../components/compare/ResultsGrid";
+import DocumentPicker from "../components/upload/DocumentPicker";
+import UploadDocumentsModal from "../components/upload/UploadDocumentsModal";
 
 const MAX_CONFIGS = 4;
 
-function deriveCollectionName(embeddingModel, chunkStrategy) {
-  const modelKeyByProvider = {
-    nvidia: "nv_embed_v1",
-    huggingface: "all_minilm_l6_v2",
-  };
-  const modelKey = modelKeyByProvider[embeddingModel] || embeddingModel;
-  return `${embeddingModel}_${modelKey}_${chunkStrategy}`.toLowerCase().replace(/\s+/g, "_");
+function deriveCollectionName(embeddingProvider, embeddingModel, chunkStrategy) {
+  const normalizedModel = String(embeddingModel || "")
+    .toLowerCase()
+    .replace(/[\/\-.\s]+/g, "_");
+  return `${embeddingProvider}_${normalizedModel}_${chunkStrategy}`.toLowerCase();
 }
 
 function createPresetConfigs() {
   return [
-    { name: "Broad Recall", chunk_strategy: "fixed", embedding_model: "nvidia", top_k: 8, threshold: 0.3 },
-    { name: "Precision Focus", chunk_strategy: "semantic", embedding_model: "huggingface", top_k: 3, threshold: 0.7 },
+    {
+      name: "Broad Recall",
+      chunk_strategy: "fixed_size",
+      chunk_params: { chunk_size: 512, overlap: 50 },
+      embedding_provider: "nvidia",
+      embedding_model: "nvidia/nv-embed-v1",
+      top_k: 8,
+      threshold: 0.3,
+    },
+    {
+      name: "Precision Focus",
+      chunk_strategy: "semantic",
+      chunk_params: {
+        max_chunk_size: 512,
+        min_chunk_size: 100,
+        similarity_threshold: 0.7,
+        hard_split_threshold: 0.4,
+        overlap_sentences: 1,
+      },
+      embedding_provider: "huggingface",
+      embedding_model: "sentence-transformers/all-MiniLM-L6-v2",
+      top_k: 3,
+      threshold: 0.7,
+    },
   ].map((config) => ({
     ...config,
-    collection_name: deriveCollectionName(config.embedding_model, config.chunk_strategy),
+    collection_name: deriveCollectionName(
+      config.embedding_provider,
+      config.embedding_model,
+      config.chunk_strategy,
+    ),
     indexingStatus: "idle",
     isPreset: true,
   }));
 }
 
 export default function ComparePage() {
-  const { filename: activeDataset, setDocId, setFilename } = useSession();
+  const { docId: activeDocId, filename: activeDataset, setDocId, setFilename } = useSession();
   const [availableConfigs, setAvailableConfigs] = useState(createPresetConfigs);
   const [stagedConfigs, setStagedConfigs] = useState([]);
   const [query, setQuery] = useState("");
@@ -45,13 +72,17 @@ export default function ComparePage() {
   const [toast, setToast] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
+  const [showUploadModal, setShowUploadModal] = useState(false);
   const resultsRef = useRef(null);
-  const fileInputRef = useRef(null);
   const activeDatasetRef = useRef(activeDataset);
 
-  const isDatasetMissing = !activeDataset;
+  const isDatasetMissing = !activeDataset || !activeDocId;
   const stagedLookup = useMemo(() => new Set(stagedConfigs.map((config) => config.name)), [stagedConfigs]);
   const getConfigByName = (name) => availableConfigs.find((config) => config.name === name);
+  const stagedConfigsLive = useMemo(
+    () => stagedConfigs.map((config) => getConfigByName(config.name) || config),
+    [stagedConfigs, availableConfigs],
+  );
   const readyStatuses = new Set(["ready", "already_exists"]);
   const hasPendingIndexing = stagedConfigs.some((config) => {
     const current = getConfigByName(config.name);
@@ -93,9 +124,12 @@ export default function ComparePage() {
     updateConfigByName(config.name, { indexingStatus: "indexing" });
     try {
       const { data } = await compareIndex({
+        document_id: activeDocId,
         config: {
           name: config.name,
           chunk_strategy: config.chunk_strategy,
+          chunk_params: config.chunk_params || {},
+          embedding_provider: config.embedding_provider,
           embedding_model: config.embedding_model,
           top_k: Number(config.top_k),
           threshold: Number(config.threshold),
@@ -154,7 +188,11 @@ export default function ComparePage() {
   const handleSaveCustomConfig = (config) => {
     const nextConfig = {
       ...config,
-      collection_name: deriveCollectionName(config.embedding_model, config.chunk_strategy),
+      collection_name: deriveCollectionName(
+        config.embedding_provider,
+        config.embedding_model,
+        config.chunk_strategy,
+      ),
       indexingStatus: "idle",
       isPreset: false,
     };
@@ -165,18 +203,31 @@ export default function ComparePage() {
     showToast(`Saved "${config.name}". Add it to staging and run to save configs.`);
   };
 
-  const handleUpload = async (file) => {
-    if (!file) return;
+  const handleUpload = async (files) => {
+    const nextFiles = Array.from(files || []).filter(Boolean);
+    if (!nextFiles.length) return;
 
     setIsUploading(true);
     setUploadProgress(0);
     try {
-      const formData = new FormData();
-      formData.append("file", file);
-      const { data } = await uploadDocument(formData, setUploadProgress);
-      setDocId(data?.id || null);
-      setFilename(data?.filename || file.name);
-      showToast(`Uploaded "${data?.filename || file.name}".`);
+      let lastUploaded = null;
+      for (let index = 0; index < nextFiles.length; index += 1) {
+        const file = nextFiles[index];
+        const formData = new FormData();
+        formData.append("file", file);
+        const { data } = await uploadDocument(formData, (progress) => {
+          const current = Math.max(0, Math.min(100, Number(progress) || 0));
+          const overall = ((index + current / 100) / nextFiles.length) * 100;
+          setUploadProgress(Math.round(overall));
+        });
+        lastUploaded = data;
+      }
+      if (lastUploaded) {
+        setDocId(lastUploaded?.id || null);
+        setFilename(lastUploaded?.filename || nextFiles[nextFiles.length - 1].name);
+      }
+      showToast(`Uploaded ${nextFiles.length} file(s).`);
+      setShowUploadModal(false);
     } catch (error) {
       const detail = error?.response?.data?.detail || error?.message || "Upload failed.";
       showToast(detail, "error");
@@ -255,6 +306,8 @@ export default function ComparePage() {
           return {
             name: current.name,
             chunk_strategy: current.chunk_strategy,
+            chunk_params: current.chunk_params || {},
+            embedding_provider: current.embedding_provider,
             embedding_model: current.embedding_model,
             top_k: Number(current.top_k),
             threshold: Number(current.threshold),
@@ -297,31 +350,41 @@ export default function ComparePage() {
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-lg font-semibold text-gray-900">Upload Document</h2>
-            <p className="text-sm text-gray-500">Upload a file directly in Compare before indexing staged configs.</p>
+            <p className="text-sm text-gray-500">Upload a file or load an existing document before indexing staged configs.</p>
           </div>
           <Button
-            onClick={() => fileInputRef.current?.click()}
+            onClick={() => setShowUploadModal(true)}
             disabled={isUploading || isLoading}
             variant="secondary"
           >
-            {isUploading ? "Uploading..." : "Upload File"}
+            {isUploading ? `Uploading... ${uploadProgress}%` : "Upload Documents"}
           </Button>
         </div>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".pdf,.txt,.epub"
-          className="hidden"
-          onChange={(event) => {
-            const file = event.target.files?.[0];
-            if (file) void handleUpload(file);
-            event.target.value = "";
-          }}
-        />
-        {isUploading && (
-          <p className="text-sm text-blue-700">Uploading... {uploadProgress}%</p>
-        )}
+        {isUploading && <p className="text-sm text-blue-700">Uploading... {uploadProgress}%</p>}
+
+        <div className="mt-4">
+          <DocumentPicker
+            value={activeDocId || ""}
+            onSelect={(doc) => {
+              setDocId(doc?.id || null);
+              setFilename(doc?.filename || null);
+              showToast(doc ? `Loaded "${doc.filename}".` : "Cleared document selection.", doc ? "success" : "warning");
+            }}
+            disabled={isUploading || isLoading || isRunningStaged}
+            label="Load Previously Uploaded Document"
+          />
+        </div>
       </section>
+
+      <UploadDocumentsModal
+        open={showUploadModal}
+        onClose={() => setShowUploadModal(false)}
+        onUpload={handleUpload}
+        uploading={isUploading}
+        progress={uploadProgress}
+        allowMultiple
+        title="Upload documents for Compare"
+      />
 
       <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm md:p-5">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -351,7 +414,7 @@ export default function ComparePage() {
       </section>
 
       <StagingPanel
-        stagedConfigs={stagedConfigs}
+        stagedConfigs={stagedConfigsLive}
         onRemove={handleRemoveConfig}
         onClearAll={handleClearAll}
         onRunStaged={handleRunAndSaveConfigs}

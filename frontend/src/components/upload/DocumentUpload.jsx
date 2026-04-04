@@ -1,3 +1,4 @@
+import React from 'react';
 import { useRef, useState } from "react";
 import { ProgressBar } from "../common/index";
 import { useSession } from "../../hooks/useSession";

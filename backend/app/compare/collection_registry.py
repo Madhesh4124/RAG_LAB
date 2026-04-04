@@ -19,10 +19,21 @@ def _load_chroma_class():
 Chroma = _load_chroma_class()
 
 from app.services.embedding.huggingface_api_embedder import HuggingFaceAPIEmbedder
+from app.services.embedding.google_embedder import GoogleEmbedder
 from app.services.embedding.nvidia_embedder import NvidiaEmbedder
 
 _registry: Dict[str, Any] = {}
 _PERSIST_DIR = Path(__file__).resolve().parents[2] / "chroma_store"
+
+
+def _scoped_collection_name(collection_name: str, user_scope: str | None = None) -> str:
+    if not user_scope:
+        return collection_name
+    return f"user_{user_scope}_{collection_name}"
+
+
+def _registry_key(collection_name: str, user_scope: str | None = None) -> str:
+    return _scoped_collection_name(collection_name, user_scope)
 
 
 class _EmbeddingAdapter:
@@ -46,34 +57,56 @@ class _EmbeddingAdapter:
         return self.embed_query(text)
 
 
-def _load_embedder(embedding_model: str):
-    if embedding_model == "nvidia":
-        return _EmbeddingAdapter(NvidiaEmbedder(model="nvidia/nv-embed-v1"))
-    if embedding_model == "huggingface":
+def _load_embedder(embedding_provider: str, embedding_model: str):
+    if embedding_provider == "nvidia":
+        model_name = embedding_model or "nvidia/nv-embed-v1"
+        return _EmbeddingAdapter(NvidiaEmbedder(model=model_name))
+    if embedding_provider == "huggingface":
+        model_name = embedding_model or "sentence-transformers/all-MiniLM-L6-v2"
         try:
             from langchain_huggingface import HuggingFaceEmbeddings
 
-            return _EmbeddingAdapter(HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2"))
+            return _EmbeddingAdapter(HuggingFaceEmbeddings(model_name=model_name))
         except Exception:
-            return _EmbeddingAdapter(HuggingFaceAPIEmbedder(model="sentence-transformers/all-MiniLM-L6-v2"))
-    raise ValueError(f"Unsupported embedding model: {embedding_model}")
+            return _EmbeddingAdapter(HuggingFaceAPIEmbedder(model=model_name))
+    if embedding_provider == "google":
+        model_name = embedding_model or "models/gemini-embedding-2-preview"
+        return _EmbeddingAdapter(GoogleEmbedder(model=model_name))
+    raise ValueError(f"Unsupported embedding provider: {embedding_provider}")
 
 
-def get_or_load_collection(collection_name: str, embedding_model: str) -> Any:
-    if collection_name not in _registry:
-        embedder = _load_embedder(embedding_model)
+def get_or_load_collection(
+    collection_name: str,
+    embedding_provider: str,
+    embedding_model: str,
+    user_scope: str | None = None,
+) -> Any:
+    scoped_collection_name = _scoped_collection_name(collection_name, user_scope)
+    key = _registry_key(collection_name, user_scope)
+    if key not in _registry:
+        embedder = _load_embedder(embedding_provider, embedding_model)
         vectorstore = Chroma(
-            collection_name=collection_name,
+            collection_name=scoped_collection_name,
             embedding_function=embedder,
             persist_directory=str(_PERSIST_DIR),
         )
-        _registry[collection_name] = vectorstore
-    return _registry[collection_name]
+        _registry[key] = vectorstore
+    return _registry[key]
 
 
-def collection_exists(collection_name: str, embedding_model: str = "nvidia") -> bool:
+def collection_exists(
+    collection_name: str,
+    embedding_provider: str = "nvidia",
+    embedding_model: str = "nvidia/nv-embed-v1",
+    user_scope: str | None = None,
+) -> bool:
     try:
-        vectorstore = get_or_load_collection(collection_name, embedding_model)
+        vectorstore = get_or_load_collection(
+            collection_name,
+            embedding_provider,
+            embedding_model,
+            user_scope=user_scope,
+        )
         return int(vectorstore._collection.count()) > 0
     except Exception:
         return False

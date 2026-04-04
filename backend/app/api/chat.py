@@ -4,8 +4,11 @@ from typing import Any, List
 from fastapi import APIRouter, Depends, HTTPException, Body
 from sqlalchemy.orm import Session
 from sqlalchemy import select
+from pydantic import BaseModel
 
 from app.database import get_db
+from app.auth import get_current_user
+from app.models.user import User
 from app.models.document import Document
 from app.models.rag_config import RAGConfig
 from app.models.chat import ChatMessage, ChatMessageResponse
@@ -61,18 +64,85 @@ def _fallback_answer_from_chunks(query: str, chunks: List[Any]) -> str:
         f"{joined}"
     )
 
+
+class PrepareChatRequest(BaseModel):
+    document_id: uuid.UUID
+    document_ids: List[uuid.UUID] | None = None
+    config_id: uuid.UUID
+
+
+@router.post("/prepare")
+def prepare_chat_session(
+    payload: PrepareChatRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from app.services.pipeline_manager import PipelineManager
+
+    target_doc_ids = payload.document_ids or [payload.document_id]
+    normalized_doc_ids = []
+    seen = set()
+    for item in target_doc_ids:
+        key = str(item)
+        if key not in seen:
+            seen.add(key)
+            normalized_doc_ids.append(item)
+
+    doc_stmt = select(Document).where(Document.id.in_(normalized_doc_ids), Document.user_id == current_user.id)
+    cfg_stmt = select(RAGConfig).where(
+        RAGConfig.id == payload.config_id,
+        RAGConfig.user_id == current_user.id,
+        RAGConfig.document_id == payload.document_id,
+    )
+
+    docs = db.execute(doc_stmt).scalars().all()
+    config = db.execute(cfg_stmt).scalars().first()
+
+    if not docs or len(docs) != len(normalized_doc_ids):
+        raise HTTPException(status_code=404, detail="Document not found")
+    if not config:
+        raise HTTPException(status_code=404, detail="Config not found")
+
+    pipeline_config = deepcopy(config.config_json or {})
+    vectorstore_cfg = deepcopy(pipeline_config.get("vectorstore", {}))
+    if vectorstore_cfg.get("type") == "chroma":
+        vectorstore_cfg["collection_name"] = f"user_{current_user.id}_rag_cfg_{config.id}"
+        pipeline_config["vectorstore"] = vectorstore_cfg
+
+    pipeline = PipelineManager.get_pipeline(f"{current_user.id}:{config.id}", pipeline_config)
+    for doc in docs:
+        pipeline.index_document(
+            text=doc.content,
+            doc_id=str(doc.id),
+            metadata={"filename": doc.filename, "file_type": doc.file_type},
+        )
+
+    return {
+        "status": "ready",
+        "document_id": str(payload.document_id),
+        "document_ids": [str(item) for item in normalized_doc_ids],
+        "config_id": str(payload.config_id),
+    }
+
 @router.post("/")
 def chat_endpoint(
     query: str = Body(...),
     doc_id: uuid.UUID = Body(...),
     config_id: uuid.UUID = Body(...),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     from app.api.evaluation import score_message
     from app.services.pipeline_manager import PipelineManager
 
-    doc = db.get(Document, doc_id)
-    config = db.get(RAGConfig, config_id)
+    doc_stmt = select(Document).where(Document.id == doc_id, Document.user_id == current_user.id)
+    cfg_stmt = select(RAGConfig).where(
+        RAGConfig.id == config_id,
+        RAGConfig.user_id == current_user.id,
+        RAGConfig.document_id == doc_id,
+    )
+    doc = db.execute(doc_stmt).scalars().first()
+    config = db.execute(cfg_stmt).scalars().first()
     
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -85,10 +155,10 @@ def chat_endpoint(
         pipeline_config = deepcopy(config.config_json or {})
         vectorstore_cfg = deepcopy(pipeline_config.get("vectorstore", {}))
         if vectorstore_cfg.get("type") == "chroma":
-            vectorstore_cfg["collection_name"] = f"rag_cfg_{config.id}"
+            vectorstore_cfg["collection_name"] = f"user_{current_user.id}_rag_cfg_{config.id}"
             pipeline_config["vectorstore"] = vectorstore_cfg
 
-        pipeline = PipelineManager.get_pipeline(str(config_id), pipeline_config)
+        pipeline = PipelineManager.get_pipeline(f"{current_user.id}:{config_id}", pipeline_config)
         retrieval_cfg = config.config_json.get("retriever", {}) if config.config_json else {}
         top_k = int(retrieval_cfg.get("top_k", 5))
         similarity_threshold = retrieval_cfg.get("similarity_threshold", None)
@@ -156,6 +226,7 @@ def chat_endpoint(
                 })
 
     user_msg = ChatMessage(
+        user_id=current_user.id,
         document_id=doc_id,
         config_id=config_id,
         role="user",
@@ -165,6 +236,7 @@ def chat_endpoint(
     db.add(user_msg)
     
     assistant_msg = ChatMessage(
+        user_id=current_user.id,
         document_id=doc_id,
         config_id=config_id,
         role="assistant",
@@ -221,35 +293,53 @@ import json
 async def chat_stream_endpoint(
     query: str = Body(...),
     doc_id: uuid.UUID = Body(...),
+    doc_ids: List[uuid.UUID] | None = Body(None),
     config_id: uuid.UUID = Body(...),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Streaming version for better perceived latency."""
     from app.services.pipeline_manager import PipelineManager
 
-    doc = db.get(Document, doc_id)
-    config = db.get(RAGConfig, config_id)
+    requested_ids = doc_ids or [doc_id]
+    normalized_ids = []
+    seen = set()
+    for item in requested_ids:
+        key = str(item)
+        if key not in seen:
+            seen.add(key)
+            normalized_ids.append(item)
+
+    doc_stmt = select(Document).where(Document.id.in_(normalized_ids), Document.user_id == current_user.id)
+    cfg_stmt = select(RAGConfig).where(
+        RAGConfig.id == config_id,
+        RAGConfig.user_id == current_user.id,
+        RAGConfig.document_id == doc_id,
+    )
+    docs = db.execute(doc_stmt).scalars().all()
+    config = db.execute(cfg_stmt).scalars().first()
     
-    if not doc or not config:
+    if not docs or len(docs) != len(normalized_ids) or not config:
         raise HTTPException(status_code=404, detail="Resource not found")
 
     pipeline_config = deepcopy(config.config_json or {})
     if pipeline_config.get("vectorstore", {}).get("type") == "chroma":
-        pipeline_config["vectorstore"]["collection_name"] = f"rag_cfg_{config_id}"
+        pipeline_config["vectorstore"]["collection_name"] = f"user_{current_user.id}_rag_cfg_{config_id}"
 
-    pipeline = PipelineManager.get_pipeline(str(config_id), pipeline_config)
+    pipeline = PipelineManager.get_pipeline(f"{current_user.id}:{config_id}", pipeline_config)
     retrieval_cfg = pipeline_config.get("retriever", {})
     top_k = int(retrieval_cfg.get("top_k", 5))
     similarity_threshold = float(retrieval_cfg.get("similarity_threshold", 0.0))
 
     async def event_generator():
         # 1. Notify immediately; start indexing inside generator so response begins right away
-        already_indexed = str(doc_id) in pipeline._indexed_doc_ids
-        if not already_indexed:
-            _msg = json.dumps({'type': 'status', 'message': 'Indexing document…'})
+        missing_doc_ids = [str(item.id) for item in docs if str(item.id) not in pipeline._indexed_doc_ids]
+        if missing_doc_ids:
+            _msg = json.dumps({'type': 'status', 'message': f'Indexing {len(missing_doc_ids)} document(s)…'})
             yield f"data: {_msg}\n\n"
 
-        pipeline.index_document(doc.content, str(doc_id), {"filename": doc.filename, "file_type": doc.file_type})
+        for doc in docs:
+            pipeline.index_document(doc.content, str(doc.id), {"filename": doc.filename, "file_type": doc.file_type})
 
         _msg2 = json.dumps({'type': 'status', 'message': 'Retrieving relevant chunks…'})
         yield f"data: {_msg2}\n\n"
@@ -282,10 +372,19 @@ async def chat_stream_endpoint(
 
         # 4. Persist to DB (non-blocking for UI because done is already sent)
         try:
-            user_msg = ChatMessage(document_id=doc_id, config_id=config_id, role="user", content=query)
+            user_msg = ChatMessage(
+                user_id=current_user.id,
+                document_id=doc_id,
+                config_id=config_id,
+                role="user",
+                content=query,
+            )
             db.add(user_msg)
             assistant_msg = ChatMessage(
-                document_id=doc_id, config_id=config_id, role="assistant",
+                user_id=current_user.id,
+                document_id=doc_id,
+                config_id=config_id,
+                role="assistant",
                 content=full_response,
                 retrieved_chunks=[{"text": getattr(c, "text", ""), "score": scores[i]} for i, c in enumerate(chunks)]
             )
@@ -297,14 +396,19 @@ async def chat_stream_endpoint(
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 @router.get("/history/{doc_id}", response_model=list[ChatMessageResponse])
-def get_chat_history(doc_id: uuid.UUID, db: Session = Depends(get_db)):
-    stmt = select(ChatMessage).where(ChatMessage.document_id == doc_id).order_by(ChatMessage.timestamp)
+def get_chat_history(doc_id: uuid.UUID, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    stmt = (
+        select(ChatMessage)
+        .where(ChatMessage.document_id == doc_id, ChatMessage.user_id == current_user.id)
+        .order_by(ChatMessage.timestamp)
+    )
     return db.execute(stmt).scalars().all()
 
 @router.post("/reset")
 def reset_system(
     doc_id: uuid.UUID = Body(...), 
     config_id: uuid.UUID = Body(...), 
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Resets memory, deletes history, and clears vectordb collections."""
@@ -317,7 +421,7 @@ def reset_system(
     PipelineManager.clear_cache()
     
     # 2. Clear Database conversation history for this document
-    db.execute(delete(ChatMessage).where(ChatMessage.document_id == doc_id))
+    db.execute(delete(ChatMessage).where(ChatMessage.document_id == doc_id, ChatMessage.user_id == current_user.id))
     db.commit()
     
     # 3. Clear Chroma storage folder if it exists (wipe everything)

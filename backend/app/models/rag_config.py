@@ -11,6 +11,7 @@ class RAGConfig(Base):
     __tablename__ = "rag_configs"
 
     id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
+    user_id = Column(Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     document_id = Column(Uuid(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
     name = Column(String(100), nullable=False)
     config_json = Column(JSON, nullable=False)
@@ -28,6 +29,7 @@ class RAGConfigCreate(BaseModel):
 
 class RAGConfigResponse(BaseModel):
     id: uuid.UUID
+    user_id: uuid.UUID
     document_id: uuid.UUID
     name: str
     config_json: Dict[str, Any]

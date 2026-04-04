@@ -193,7 +193,7 @@ export function RetrievalStep({ config, onChange }) {
 }
 
 // ── LLMStep ──────────────────────────────────────────────────
-export function LLMStep({ config, memoryConfig, onLLMChange, onMemoryChange }) {
+export function LLMStep({ memoryConfig, onMemoryChange }) {
   const memoryType = memoryConfig.type || "buffer";
   const maxTurns = memoryConfig.max_turns ?? 5;
   const maxTurnsBeforeSummary = memoryConfig.max_turns_before_summary ?? 5;
@@ -208,15 +208,10 @@ export function LLMStep({ config, memoryConfig, onLLMChange, onMemoryChange }) {
       {/* LLM Model */}
       <div className="rounded-xl border border-gray-200 bg-white p-4 space-y-3">
         <label className="text-sm font-medium text-gray-700">Model</label>
-        <select
-          value={config.model}
-          onChange={(e) => onLLMChange({ model: e.target.value })}
-          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
-        >
-          <option value="gemma-4-26b-a4b-it">Gemma 4 26B A4B IT (Balanced)</option>
-          <option value="gemini-2.0-pro-exp-02-05">Gemini 2.0 Pro (Sophisticated)</option>
-        </select>
-        <p className="text-xs text-gray-400">The model used for answer synthesis.</p>
+        <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-800">
+          Gemma 4 26B A4B IT
+        </div>
+        <p className="text-xs text-gray-400">Gemma is used for answer synthesis.</p>
       </div>
 
       {/* Memory Configuration */}

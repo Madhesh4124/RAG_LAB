@@ -6,6 +6,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.auth import get_current_user
+from app.models.user import User
 from app.models.chat import ChatMessage
 from app.models.evaluation import EvaluationResult
 from app.models.metrics import Metrics
@@ -15,9 +17,13 @@ router = APIRouter(prefix="/api/metrics", tags=["metrics"])
 
 
 @router.get("/summary")
-def get_metrics_summary(document_id: uuid.UUID = Query(...), db: Session = Depends(get_db)):
+def get_metrics_summary(
+    document_id: uuid.UUID = Query(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     configs = db.execute(
-        select(RAGConfig).where(RAGConfig.document_id == document_id)
+        select(RAGConfig).where(RAGConfig.document_id == document_id, RAGConfig.user_id == current_user.id)
     ).scalars().all()
     if not configs:
         raise HTTPException(status_code=404, detail="No configs found for document")
@@ -26,7 +32,7 @@ def get_metrics_summary(document_id: uuid.UUID = Query(...), db: Session = Depen
 
     all_messages = db.execute(
         select(ChatMessage)
-        .where(ChatMessage.document_id == document_id)
+        .where(ChatMessage.document_id == document_id, ChatMessage.user_id == current_user.id)
         .order_by(ChatMessage.timestamp)
     ).scalars().all()
 

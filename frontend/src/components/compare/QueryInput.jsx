@@ -1,3 +1,4 @@
+import React from 'react';
 import { Button } from "../common/index";
 
 export default function QueryInput({ query, onChange, onRun, isLoading, isDisabled, stagedCount, isActivated }) {

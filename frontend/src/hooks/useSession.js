@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 const STORAGE_KEY = "rag_lab_session";
 
-const EMPTY_SESSION = { docId: null, configId: null, filename: null };
+const EMPTY_SESSION = { docId: null, configId: null, filename: null, mode: null };
 
 function loadInitialSession() {
   try {
@@ -13,6 +13,7 @@ function loadInitialSession() {
       docId: parsed?.docId || null,
       configId: parsed?.configId || null,
       filename: parsed?.filename || null,
+      mode: parsed?.mode || null,
     };
   } catch {
     return EMPTY_SESSION;
@@ -38,17 +39,23 @@ export function useSession() {
     setSession((prev) => ({ ...prev, filename }));
   }, []);
 
+  const setMode = useCallback((mode) => {
+    setSession((prev) => ({ ...prev, mode }));
+  }, []);
+
   const clear = useCallback(() => {
-    setSession({ docId: null, configId: null, filename: null });
+    setSession({ docId: null, configId: null, filename: null, mode: null });
   }, []);
 
   return {
     docId: session.docId,
     configId: session.configId,
     filename: session.filename,
+    mode: session.mode,
     setDocId,
     setConfigId,
     setFilename,
+    setMode,
     clear,
   };
 }

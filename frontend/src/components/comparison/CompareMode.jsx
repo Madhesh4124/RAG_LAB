@@ -1,3 +1,4 @@
+import React from 'react';
 import { useState } from "react";
 import { compareConfigs, MOCK_COMPARE_RESULTS } from "../../services/api";
 import ConfigCard from "./ConfigCard";

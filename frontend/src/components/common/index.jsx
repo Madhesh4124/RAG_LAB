@@ -1,3 +1,5 @@
+import React from "react";
+
 // ── Button ──────────────────────────────────────────────────────
 export function Button({ children, onClick, variant = "primary", disabled, className = "", type = "button" }) {
   const base = "px-4 py-2 rounded-lg font-medium text-sm transition-all focus:outline-none focus:ring-2 focus:ring-offset-1 disabled:opacity-40 disabled:cursor-not-allowed";

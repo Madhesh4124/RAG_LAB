@@ -11,12 +11,67 @@ import os
 from fastapi import File, UploadFile, Form, BackgroundTasks
 from fastapi.responses import FileResponse
 from app.utils.serialization import ConfigSerializer
+from app.auth import get_current_user
+from app.models.user import User
+from app.models.document import Document
+from app.services.best_preset import BEST_PRESET_NAME, BEST_PRESET_VERSION, get_best_preset_config
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/config", tags=["config"])
 
-@router.post("/", response_model=RAGConfigResponse)
-def create_config(config_in: RAGConfigCreate, db: Session = Depends(get_db)):
+
+class ApplyBestPresetRequest(BaseModel):
+    document_id: uuid.UUID
+    name: Optional[str] = None
+
+
+@router.get("/best-preset")
+def get_best_preset(current_user: User = Depends(get_current_user)):
+    _ = current_user  # keeps endpoint protected and future-proof for role-scoped presets
+    return {
+        "name": BEST_PRESET_NAME,
+        "version": BEST_PRESET_VERSION,
+        "config_json": get_best_preset_config(),
+    }
+
+
+@router.post("/best-preset/apply", response_model=RAGConfigResponse)
+def apply_best_preset(
+    payload: ApplyBestPresetRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    doc_stmt = select(Document).where(Document.id == payload.document_id, Document.user_id == current_user.id)
+    owned_doc = db.execute(doc_stmt).scalars().first()
+    if not owned_doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    config_name = payload.name or f"{BEST_PRESET_NAME} {BEST_PRESET_VERSION}"
     new_config = RAGConfig(
+        user_id=current_user.id,
+        document_id=payload.document_id,
+        name=config_name,
+        config_json=get_best_preset_config(),
+        is_active=True,
+    )
+    db.add(new_config)
+    db.commit()
+    db.refresh(new_config)
+    return new_config
+
+@router.post("/", response_model=RAGConfigResponse)
+def create_config(
+    config_in: RAGConfigCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    doc_stmt = select(Document).where(Document.id == config_in.document_id, Document.user_id == current_user.id)
+    owned_doc = db.execute(doc_stmt).scalars().first()
+    if not owned_doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    new_config = RAGConfig(
+        user_id=current_user.id,
         document_id=config_in.document_id,
         name=config_in.name,
         config_json=config_in.config_json,
@@ -28,22 +83,33 @@ def create_config(config_in: RAGConfigCreate, db: Session = Depends(get_db)):
     return new_config
 
 @router.get("/list", response_model=List[RAGConfigResponse])
-def list_configs(doc_id: Optional[uuid.UUID] = Query(None), db: Session = Depends(get_db)):
-    stmt = select(RAGConfig)
+def list_configs(
+    doc_id: Optional[uuid.UUID] = Query(None),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    stmt = select(RAGConfig).where(RAGConfig.user_id == current_user.id)
     if doc_id:
         stmt = stmt.where(RAGConfig.document_id == doc_id)
     return db.execute(stmt).scalars().all()
 
 @router.get("/{config_id}", response_model=RAGConfigResponse)
-def get_config(config_id: uuid.UUID, db: Session = Depends(get_db)):
-    config_obj = db.get(RAGConfig, config_id)
+def get_config(config_id: uuid.UUID, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    stmt = select(RAGConfig).where(RAGConfig.id == config_id, RAGConfig.user_id == current_user.id)
+    config_obj = db.execute(stmt).scalars().first()
     if not config_obj:
         raise HTTPException(status_code=404, detail="Config not found")
     return config_obj
 
 @router.get("/{config_id}/export")
-def export_config(config_id: uuid.UUID, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    config_obj = db.get(RAGConfig, config_id)
+def export_config(
+    config_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    stmt = select(RAGConfig).where(RAGConfig.id == config_id, RAGConfig.user_id == current_user.id)
+    config_obj = db.execute(stmt).scalars().first()
     if not config_obj:
         raise HTTPException(status_code=404, detail="Config not found")
         
@@ -68,8 +134,14 @@ async def import_config(
     document_id: uuid.UUID = Form(...),
     name: str = Form(...),
     file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    doc_stmt = select(Document).where(Document.id == document_id, Document.user_id == current_user.id)
+    owned_doc = db.execute(doc_stmt).scalars().first()
+    if not owned_doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
     content = await file.read()
     try:
         json_str = content.decode("utf-8")
@@ -80,6 +152,7 @@ async def import_config(
         raise HTTPException(status_code=400, detail="File must be valid UTF-8 JSON.")
         
     new_config = RAGConfig(
+        user_id=current_user.id,
         document_id=document_id,
         name=name,
         config_json=config_dict,

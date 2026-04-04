@@ -6,6 +6,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select
 
 from app.database import get_db
+from app.auth import get_current_user
+from app.models.user import User
 from app.models.chat import ChatMessage
 from app.models.evaluation import EvaluationResult
 from app.models.rag_config import RAGConfig
@@ -79,8 +81,9 @@ def score_message(
     return result
 
 
-def score_message_by_id(db: Session, message_id: uuid.UUID) -> EvaluationResult:
-    msg = db.get(ChatMessage, message_id)
+def score_message_by_id(db: Session, message_id: uuid.UUID, user_id: uuid.UUID) -> EvaluationResult:
+    msg_stmt = select(ChatMessage).where(ChatMessage.id == message_id, ChatMessage.user_id == user_id)
+    msg = db.execute(msg_stmt).scalars().first()
     if not msg:
         raise ValueError("Message not found")
     if msg.role != "assistant":
@@ -91,6 +94,7 @@ def score_message_by_id(db: Session, message_id: uuid.UUID) -> EvaluationResult:
         .where(
             ChatMessage.document_id == msg.document_id,
             ChatMessage.config_id == msg.config_id,
+            ChatMessage.user_id == user_id,
             ChatMessage.role == "user",
             ChatMessage.timestamp <= msg.timestamp,
         )
@@ -107,10 +111,10 @@ def score_message_by_id(db: Session, message_id: uuid.UUID) -> EvaluationResult:
     pipeline_config = deepcopy(config.config_json or {})
     vectorstore_cfg = deepcopy(pipeline_config.get("vectorstore", {}))
     if vectorstore_cfg.get("type") == "chroma":
-        vectorstore_cfg["collection_name"] = f"rag_cfg_{config.id}"
+        vectorstore_cfg["collection_name"] = f"user_{user_id}_rag_cfg_{config.id}"
         pipeline_config["vectorstore"] = vectorstore_cfg
 
-    pipeline = PipelineManager.get_pipeline(str(config.id), pipeline_config)
+    pipeline = PipelineManager.get_pipeline(f"{user_id}:{config.id}", pipeline_config)
     llm_client = getattr(pipeline, "llm_client", None)
     chunks = _chunks_from_payload(msg.retrieved_chunks or [])
     result = score_message(
@@ -126,10 +130,11 @@ def score_message_by_id(db: Session, message_id: uuid.UUID) -> EvaluationResult:
 @router.post("/score")
 def evaluate_score(
     message_id: uuid.UUID = Body(..., embed=True),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     try:
-        result = score_message_by_id(db=db, message_id=message_id)
+        result = score_message_by_id(db=db, message_id=message_id, user_id=current_user.id)
     except ValueError as exc:
         text = str(exc)
         if "not found" in text.lower():

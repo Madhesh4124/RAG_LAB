@@ -1,4 +1,5 @@
 // pages/Setup.jsx  ──  feature/frontend-wizard branch
+import React from 'react';
 import { useNavigate } from "react-router-dom";
 import ConfigWizard from "../components/config/ConfigWizard";
 

@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select
 
 from app.database import get_db
+from app.auth import get_current_user
+from app.models.user import User
 from app.models.document import Document
 from app.models.rag_config import RAGConfig
 from app.models.chat import ChatMessage
@@ -23,13 +25,15 @@ def compare_configs(
     document_id: uuid.UUID = Body(...),
     query: str = Body(...),
     config_ids: Optional[List[uuid.UUID]] = Body(None),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
     Compare the same query across multiple RAG configurations.
     If config_ids not provided, returns all configs for the document.
     """
-    doc = db.get(Document, document_id)
+    doc_stmt = select(Document).where(Document.id == document_id, Document.user_id == current_user.id)
+    doc = db.execute(doc_stmt).scalars().first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     
@@ -37,12 +41,20 @@ def compare_configs(
     if config_ids:
         configs = []
         for cid in config_ids:
-            cfg = db.get(RAGConfig, cid)
-            if cfg and cfg.document_id == document_id:
+            cfg_stmt = select(RAGConfig).where(
+                RAGConfig.id == cid,
+                RAGConfig.user_id == current_user.id,
+                RAGConfig.document_id == document_id,
+            )
+            cfg = db.execute(cfg_stmt).scalars().first()
+            if cfg:
                 configs.append(cfg)
     else:
         # Get all configs for this document
-        stmt = select(RAGConfig).where(RAGConfig.document_id == document_id)
+        stmt = select(RAGConfig).where(
+            RAGConfig.document_id == document_id,
+            RAGConfig.user_id == current_user.id,
+        )
         configs = db.execute(stmt).scalars().all()
     
     if not configs:
@@ -68,7 +80,7 @@ def compare_configs(
             pipeline_config = deepcopy(config.config_json or {})
             vectorstore_cfg = deepcopy(pipeline_config.get("vectorstore", {}))
             if vectorstore_cfg.get("type") == "chroma":
-                vectorstore_cfg["collection_name"] = f"rag_cfg_{config.id}"
+                vectorstore_cfg["collection_name"] = f"user_{current_user.id}_rag_cfg_{config.id}"
                 pipeline_config["vectorstore"] = vectorstore_cfg
 
             pipeline = PipelineFactory.create_pipeline(pipeline_config)
@@ -152,6 +164,7 @@ def compare_configs(
             avg_similarity_for_db = (sum(chunk_scores) / len(chunk_scores)) if chunk_scores else 0.0
 
             assistant_msg = ChatMessage(
+                user_id=current_user.id,
                 document_id=document_id,
                 config_id=config.id,
                 role="assistant",

@@ -11,6 +11,7 @@ class ChatMessage(Base):
     __tablename__ = "chat_messages"
 
     id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
+    user_id = Column(Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     document_id = Column(Uuid(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
     config_id = Column(Uuid(as_uuid=True), ForeignKey("rag_configs.id", ondelete="CASCADE"), nullable=False, index=True)
     role = Column(String(20), nullable=False)
@@ -30,6 +31,7 @@ class ChatMessageCreate(BaseModel):
 
 class ChatMessageResponse(BaseModel):
     id: uuid.UUID
+    user_id: uuid.UUID
     document_id: uuid.UUID
     config_id: uuid.UUID
     role: str

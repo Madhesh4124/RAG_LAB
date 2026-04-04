@@ -1,7 +1,13 @@
 import axios from "axios";
 
 export const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
-const api = axios.create({ baseURL: BASE_URL });
+const api = axios.create({ baseURL: BASE_URL, withCredentials: true });
+
+// ── Auth ────────────────────────────────────────────────────────
+export const signup = (payload) => api.post("/api/auth/signup", payload);
+export const login = (payload) => api.post("/api/auth/login", payload);
+export const logout = () => api.post("/api/auth/logout");
+export const getMe = () => api.get("/api/auth/me");
 
 // ── Documents ──────────────────────────────────────────────────
 export const uploadDocument = (formData, onProgress) =>
@@ -16,8 +22,24 @@ export const getChunks = (docId, configId) =>
     params: configId ? { config_id: configId } : {}
   });
 
+export const listDocuments = (params = {}) => api.get("/api/documents/list", { params });
+export const searchDocuments = (query, limit = 50) =>
+  api.get("/api/documents/search", { params: { query, limit } });
+
 // ── Config ──────────────────────────────────────────────────────
 export const saveConfig  = (cfg)      => api.post("/api/config", cfg);
+export const getBestPreset = () => api.get("/api/config/best-preset");
+export const applyBestPreset = (payload) => api.post("/api/config/best-preset/apply", payload);
+
+export const prepareChatSession = (payload) => api.post("/api/chat/prepare", payload);
+
+// ── Admin ──────────────────────────────────────────────────────
+export const listChromaRoots = () => api.get("/api/admin/chroma");
+export const viewChromaCollection = (collectionName) => api.get(`/api/admin/chroma/collections/${collectionName}`);
+export const deleteChromaCollection = (collectionName, rootPath = null) =>
+  api.delete(`/api/admin/chroma/collections/${collectionName}`, { params: rootPath ? { root_path: rootPath } : {} });
+export const clearChromaRoot = (rootPath = null) =>
+  api.delete("/api/admin/chroma/root", { params: rootPath ? { root_path: rootPath } : {} });
 
 // ── Compare ─────────────────────────────────────────────────────
 export const compareConfigs = (payload) => api.post("/compare/run", payload);

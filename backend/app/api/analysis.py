@@ -5,6 +5,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select
 
 from app.database import get_db
+from app.auth import get_current_user
+from app.models.user import User
 from app.models.chat import ChatMessage
 from app.models.evaluation import EvaluationResult
 from app.models.metrics import Metrics
@@ -13,9 +15,10 @@ from app.services.analysis import RetrievalAnalyzer
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 
 @router.get("/{message_id}")
-def analyze_message(message_id: uuid.UUID, db: Session = Depends(get_db)):
+def analyze_message(message_id: uuid.UUID, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     # 1. Fetch the message natively mapped
-    msg = db.get(ChatMessage, message_id)
+    stmt_msg = select(ChatMessage).where(ChatMessage.id == message_id, ChatMessage.user_id == current_user.id)
+    msg = db.execute(stmt_msg).scalars().first()
     if not msg:
         raise HTTPException(status_code=404, detail="Message not found")
         

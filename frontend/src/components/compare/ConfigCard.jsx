@@ -1,6 +1,8 @@
+import React from 'react';
 import { Badge, Button } from "../common/index";
 
 export default function ConfigCard({ config, onAdd, isStaged, disabled }) {
+  const chunkParamEntries = Object.entries(config.chunk_params || {}).slice(0, 3);
   const status = config.indexingStatus || "idle";
   const statusLabel =
     status === "indexing"
@@ -34,6 +36,11 @@ export default function ConfigCard({ config, onAdd, isStaged, disabled }) {
             <Badge color="gray">threshold: {Number(config.threshold).toFixed(2)}</Badge>
             <Badge color="orange">{config.chunk_strategy}</Badge>
             <Badge color="gray">{config.embedding_model}</Badge>
+            {chunkParamEntries.map(([key, value]) => (
+              <Badge key={key} color="gray">
+                {key}: {Array.isArray(value) ? `[${value.length}]` : String(value)}
+              </Badge>
+            ))}
             <Badge color={statusColor}>{statusLabel}</Badge>
           </div>
         </div>

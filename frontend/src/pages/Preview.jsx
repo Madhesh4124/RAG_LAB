@@ -1,4 +1,5 @@
 // pages/Preview.jsx  ──  feature/chunk-visualizer branch
+import React from 'react';
 import { useEffect } from "react";
 import { useSearchParams } from "react-router-dom";
 import ChunkVisualizer from "../components/preview/ChunkVisualizer";
@@ -37,7 +38,7 @@ export default function Preview() {
         </div>
         <div className="flex gap-2">
           <Button variant="secondary" onClick={() => navigate("/setup")}>← Reconfigure</Button>
-          <Button onClick={() => navigate(`/chat?doc=${docId}&config=${configId}`)}>
+          <Button onClick={() => navigate(`/custom-chat?doc=${docId}&config=${configId}`)}>
             Start Chatting →
           </Button>
           <Button onClick={() => navigate(`/compare?doc=${docId}`)}>Try Compare Mode →</Button>

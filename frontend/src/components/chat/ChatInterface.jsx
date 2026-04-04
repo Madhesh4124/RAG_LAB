@@ -1,9 +1,10 @@
+import React from 'react';
 import { useState } from "react";
 import MessageList from "./MessageList";
 import InputBox from "./InputBox";
 import { BASE_URL } from "../../services/api";
 
-export default function ChatInterface({ docId, configId }) {
+export default function ChatInterface({ docId, docIds = [], configId }) {
   const [messages, setMessages] = useState([]);
   const [loading,  setLoading]  = useState(false);
 
@@ -19,7 +20,8 @@ export default function ChatInterface({ docId, configId }) {
       const response = await fetch(`${BASE_URL}/api/chat/stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query, doc_id: docId, config_id: configId }),
+        credentials: "include",
+        body: JSON.stringify({ query, doc_id: docId, doc_ids: docIds, config_id: configId }),
       });
 
       if (!response.ok) throw new Error("Stream connection failed");
@@ -110,6 +112,7 @@ export default function ChatInterface({ docId, configId }) {
       await fetch(`${BASE_URL}/api/chat/reset`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ doc_id: docId, config_id: configId }),
       });
       setMessages([]);
@@ -123,21 +126,15 @@ export default function ChatInterface({ docId, configId }) {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Doc info bar */}
-      {docId && (
-        <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-2 mb-4 text-xs text-blue-700 flex justify-between items-center">
-          <div>
-            📄 Document: <span className="font-mono">{docId.slice(0, 8)}…</span>
-            {configId && <> · Config: <span className="font-mono">{configId.slice(0, 8)}…</span></>}
-          </div>
-          <button 
-             onClick={handleReset}
-             className="text-red-500 hover:text-red-700 font-medium px-2 py-1 rounded hover:bg-red-50 transition-colors"
-          >
-            Reset System 🗑️
-          </button>
-        </div>
-      )}
+      <div className="mb-2 flex justify-end">
+        <button
+          onClick={handleReset}
+          className="text-xs text-gray-400 hover:text-red-600 px-2 py-1 rounded hover:bg-gray-100 transition-colors"
+          title="Reset session"
+        >
+          Reset
+        </button>
+      </div>
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto pr-1">

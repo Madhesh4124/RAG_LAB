@@ -1,14 +1,17 @@
 from typing import List, Tuple
 
 
-def derive_collection_name(embedding_model: str, chunk_strategy: str) -> str:
-    # Include concrete model identity in collection names so previously indexed
-    # collections with different embedding dimensions do not collide.
-    model_key = {
-        "nvidia": "nv_embed_v1",
-        "huggingface": "all_minilm_l6_v2",
-    }.get(embedding_model, embedding_model)
-    return f"{embedding_model}_{model_key}_{chunk_strategy}".lower().replace(" ", "_")
+def derive_collection_name(embedding_provider: str, embedding_model: str, chunk_strategy: str) -> str:
+    # Include provider + concrete model identity in collection names so
+    # collections using different embedding dimensions never collide.
+    normalized_model = (
+        embedding_model.lower()
+        .replace("/", "_")
+        .replace("-", "_")
+        .replace(" ", "_")
+        .replace(".", "_")
+    )
+    return f"{embedding_provider}_{normalized_model}_{chunk_strategy}".lower()
 
 
 def calc_avg_similarity(scores: List[float]) -> float:

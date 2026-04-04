@@ -1,3 +1,4 @@
+import React from 'react';
 import { Card } from "../common/index";
 
 const REGEX_OPTIONS = [

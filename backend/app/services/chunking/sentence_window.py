@@ -7,12 +7,14 @@ sentence window in metadata for richer generation context.
 
 import uuid
 import re
+import logging
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from app.services.chunking.base import BaseChunker, Chunk
 
 # Keep sentence splitting aligned with SemanticChunker.
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
+logger = logging.getLogger(__name__)
 
 
 class SentenceWindowChunker(BaseChunker):
@@ -31,6 +33,8 @@ class SentenceWindowChunker(BaseChunker):
         length_function: Callable used to measure text length.  Defaults
             to ``len`` (character count).  Pass a token-counting wrapper
             (e.g. a :pypi:`tiktoken` encoder) for token-aware windowing.
+        max_chunk_size: Optional sentence-size limit. Values above 150 are
+            hard-capped at 150.
     """
 
     def __init__(
@@ -132,6 +136,7 @@ class SentenceWindowChunker(BaseChunker):
             span = self._find_sentence_span(text, sentence, cursor)
             if span is None:
                 # Sentence not found even with flexible search; skip.
+                logger.warning("Could not locate sentence span at cursor=%s: %r", cursor, sentence[:120])
                 continue
             start_idx, end_idx = span
             cursor = end_idx  # advance cursor past this sentence

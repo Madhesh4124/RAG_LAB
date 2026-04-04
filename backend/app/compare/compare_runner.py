@@ -30,10 +30,16 @@ def _extract_text(doc_obj) -> str:
 async def run_single_config(
     query: str,
     config: RAGConfig,
+    user_scope: str | None = None,
 ) -> ConfigResult:
     start = time.perf_counter()
 
-    vectorstore = get_or_load_collection(config.collection_name, config.embedding_model)
+    vectorstore = get_or_load_collection(
+        config.collection_name,
+        config.embedding_provider,
+        config.embedding_model,
+        user_scope=user_scope,
+    )
 
     raw_results = await asyncio.to_thread(
         vectorstore.similarity_search_with_score,
@@ -95,9 +101,10 @@ async def run_single_config(
 async def run_comparison(
     query: str,
     configs: List[RAGConfig],
+    user_scope: str | None = None,
 ) -> List[ConfigResult]:
     results: List[ConfigResult] = []
     for cfg in configs:
-        result = await run_single_config(query=query, config=cfg)
+        result = await run_single_config(query=query, config=cfg, user_scope=user_scope)
         results.append(result)
     return results

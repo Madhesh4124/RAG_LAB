@@ -1,7 +1,10 @@
+import React from 'react';
+import { useState } from "react";
 import { useConfig }    from "../../hooks/useConfig";
 import { useDocument }  from "../../hooks/useDocument";
 import { useSession }   from "../../hooks/useSession";
-import DocumentUpload   from "../upload/DocumentUpload";
+import DocumentPicker   from "../upload/DocumentPicker";
+import UploadDocumentsModal from "../upload/UploadDocumentsModal";
 import PresetSelector   from "./PresetSelector";
 import ChunkingStep     from "./ChunkingStep";
 import { EmbeddingStep, RetrievalStep, LLMStep } from "./Steps";
@@ -13,12 +16,26 @@ const STEP_LABELS = ["Upload", "Chunking", "Embedding", "Retrieval", "LLM & Memo
 
 export default function ConfigWizard() {
   const navigate = useNavigate();
+  const [showUploadModal, setShowUploadModal] = useState(false);
   const { config, step, updateChunking, updateEmbedding, updateRetrieval, updateLLM, updateMemory, applyPreset, nextStep, prevStep } = useConfig();
-  const { document, upload, uploading, uploadProgress, clearDocument } = useDocument();
+  const { document, upload, uploading, uploadProgress, clearDocument, selectDocument } = useDocument();
   const { setDocId, setConfigId, setFilename } = useSession();
 
   const canAdvance = step === 0 ? !!document : true;
   const isLastStep = step === STEP_LABELS.length - 1;
+
+  const handleSelectExistingDocument = (doc) => {
+    if (!doc) return;
+    selectDocument({
+      id: doc.id,
+      filename: doc.filename,
+      file_type: doc.file_type || "unknown",
+      file_size: doc.file_size || 0,
+      content: "",
+    });
+    setDocId(doc.id);
+    setFilename(doc.filename);
+  };
 
   const handleComplete = async () => {
     if (!document?.id) return;
@@ -51,7 +68,30 @@ export default function ConfigWizard() {
   };
 
   const stepComponents = [
-    <DocumentUpload document={document} onUpload={upload} onClear={clearDocument} uploading={uploading} progress={uploadProgress} />,
+    <div className="space-y-4">
+      <div className="flex items-center justify-between rounded-xl border border-gray-200 bg-white p-3">
+        <p className="text-sm text-gray-600">Upload document(s) through a compact dialog.</p>
+        <Button variant="secondary" onClick={() => setShowUploadModal(true)} disabled={uploading}>
+          {uploading ? `Uploading... ${uploadProgress}%` : "Upload Documents"}
+        </Button>
+      </div>
+      <DocumentPicker value={document?.id || ""} onSelect={handleSelectExistingDocument} disabled={uploading} />
+      {document && (
+        <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
+          <p className="text-sm text-gray-700">Selected: <span className="font-medium">{document.filename}</span></p>
+          <button onClick={clearDocument} className="mt-2 text-xs text-blue-600 hover:text-blue-700">Clear selection</button>
+        </div>
+      )}
+      <UploadDocumentsModal
+        open={showUploadModal}
+        onClose={() => setShowUploadModal(false)}
+        onUpload={upload}
+        uploading={uploading}
+        progress={uploadProgress}
+        allowMultiple
+        title="Upload documents for Custom Chat"
+      />
+    </div>,
     <ChunkingStep    config={config.chunker}      onChange={updateChunking} />,
     <EmbeddingStep   config={config.embedder}     onChange={updateEmbedding} />,
     <RetrievalStep   config={config.retriever}    onChange={updateRetrieval} />,

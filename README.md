@@ -1,3 +1,13 @@
+---
+title: RAG Lab
+emoji: 🔬
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+sdk_version: latest
+pinned: false
+---
+
 # RAG Lab
 
 RAG Lab is a full-stack playground for building, tuning, and comparing Retrieval-Augmented Generation (RAG) pipelines on your own documents.

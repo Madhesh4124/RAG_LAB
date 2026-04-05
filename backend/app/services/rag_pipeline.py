@@ -1,10 +1,10 @@
-"""
-RAG Pipeline.
+"""RAG pipeline orchestration.
 
-Orchestrates the chunking, embedding, and vector storage components
-into a single, unified workflow.
+The pipeline remains responsible for chunking, retrieval, and generation, but
+it no longer keeps request/user state that could leak across requests.
 """
 
+import asyncio
 import hashlib
 from typing import Any, Dict, List, Tuple, Optional
 
@@ -47,18 +47,10 @@ class RAGPipeline:
         self.llm_client = llm_client
         self.reranker = reranker
         self.timer = PipelineTimer()
-        self._indexed_doc_ids = set()
 
     def index_document(self, text: str, doc_id: str, metadata: dict) -> None:
         """Processes a document and indexes it into the vector store.
         """
-        if doc_id in self._indexed_doc_ids:
-            return
-
-        self.last_document_text = text
-        self.last_document_id = doc_id
-        self.last_document_metadata = metadata.copy() if metadata else {}
-            
         self.timer.reset()
         
         enriched_metadata = metadata.copy() if metadata else {}
@@ -87,7 +79,9 @@ class RAGPipeline:
         self.timer.start("embedding_time_ms")
         self.vectorstore.add_chunks(chunks=chunks, embedder=self.embedder)
         self.timer.stop("embedding_time_ms")
-        self._indexed_doc_ids.add(doc_id)
+
+    async def aindex_document(self, text: str, doc_id: str, metadata: dict) -> None:
+        await asyncio.to_thread(self.index_document, text, doc_id, metadata)
 
     def retrieve(self, query: str, top_k: int = 5) -> List[Tuple[Chunk, float]]:
         """Retrieves chunks similar to the query.
@@ -110,6 +104,9 @@ class RAGPipeline:
             self.timer.stop("reranking_time_ms")
             
         return results
+
+    async def aretrieve(self, query: str, top_k: int = 5) -> List[Tuple[Chunk, float]]:
+        return await asyncio.to_thread(self.retrieve, query, top_k)
 
     def generate(self, query: str, chunks: List[Any], llm_client: Optional[GeminiClient] = None) -> str:
         """Generation bridge wrapping contexts dynamically before pinging any LLM native interfaces."""
@@ -135,6 +132,12 @@ class RAGPipeline:
         self.timer.stop("llm_time_ms")
         return answer
 
+    async def agenerate(self, query: str, chunks: List[Any], llm_client: Optional[GeminiClient] = None) -> str:
+        target_llm = llm_client or self.llm_client
+        if target_llm and hasattr(target_llm, "generate_async"):
+            return await target_llm.generate_async(query=query, chunks=chunks, memory=self.memory)
+        return await asyncio.to_thread(self.generate, query, chunks, llm_client)
+
     def generate_stream(self, query: str, chunks: List[Any], llm_client: Optional[GeminiClient] = None):
         """Stream version of generate."""
         target_llm = llm_client or self.llm_client
@@ -155,6 +158,20 @@ class RAGPipeline:
 
         if self.memory:
             self.memory.add_interaction(query, full_response)
+
+    async def agenerate_stream(self, query: str, chunks: List[Any], llm_client: Optional[GeminiClient] = None):
+        target_llm = llm_client or self.llm_client
+        if not target_llm:
+            yield "LLM Client not initialized."
+            return
+
+        if hasattr(target_llm, "generate_stream_async"):
+            async for chunk_text in target_llm.generate_stream_async(query=query, chunks=chunks, memory=self.memory):
+                yield chunk_text
+            return
+
+        for chunk_text in await asyncio.to_thread(lambda: list(self.generate_stream(query, chunks, llm_client))):
+            yield chunk_text
         
     def get_last_timings(self) -> Dict[str, float]:
         """Returns the PipelineTimer's latest metrics dict spanning strictly active pipeline schema domains natively."""

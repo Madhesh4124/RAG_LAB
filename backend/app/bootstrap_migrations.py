@@ -1,79 +1,74 @@
 import os
 import uuid
 
-from sqlalchemy import inspect, text
-from sqlalchemy.engine import Engine
-from sqlalchemy.orm import Session
+from sqlalchemy import inspect, select, text
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
 
 from app.models.user import User
 
 
-def _column_exists(engine: Engine, table_name: str, column_name: str) -> bool:
-    inspector = inspect(engine)
-    columns = inspector.get_columns(table_name)
-    return any(col["name"] == column_name for col in columns)
+async def _column_exists(conn: AsyncConnection, table_name: str, column_name: str) -> bool:
+    def _inspect(sync_conn):
+        inspector = inspect(sync_conn)
+        columns = inspector.get_columns(table_name)
+        return any(col["name"] == column_name for col in columns)
+
+    return await conn.run_sync(_inspect)
 
 
-def _add_user_id_column_if_missing(engine: Engine, table_name: str) -> None:
-    if _column_exists(engine, table_name, "user_id"):
+async def _add_user_id_column_if_missing(conn: AsyncConnection, table_name: str) -> None:
+    if await _column_exists(conn, table_name, "user_id"):
         return
 
-    backend = engine.url.get_backend_name()
+    backend = conn.engine.url.get_backend_name()
     if backend == "postgresql":
         ddl = f"ALTER TABLE {table_name} ADD COLUMN user_id UUID"
     else:
-        # SQLite and others in local/dev setups.
         ddl = f"ALTER TABLE {table_name} ADD COLUMN user_id TEXT"
 
-    with engine.begin() as conn:
-        conn.execute(text(ddl))
+    await conn.execute(text(ddl))
 
 
-def _add_password_reset_count_if_missing(engine: Engine) -> None:
-    if _column_exists(engine, "users", "password_reset_count"):
+async def _add_password_reset_count_if_missing(conn: AsyncConnection) -> None:
+    if await _column_exists(conn, "users", "password_reset_count"):
         return
 
-    backend = engine.url.get_backend_name()
+    backend = conn.engine.url.get_backend_name()
     if backend == "postgresql":
         ddl = "ALTER TABLE users ADD COLUMN password_reset_count TIMESTAMP"
     else:
-        # SQLite
         ddl = "ALTER TABLE users ADD COLUMN password_reset_count DATETIME"
 
-    with engine.begin() as conn:
-        conn.execute(text(ddl))
+    await conn.execute(text(ddl))
 
 
-def _add_is_admin_if_missing(engine: Engine) -> None:
-    if _column_exists(engine, "users", "is_admin"):
+async def _add_is_admin_if_missing(conn: AsyncConnection) -> None:
+    if await _column_exists(conn, "users", "is_admin"):
         return
 
-    backend = engine.url.get_backend_name()
+    backend = conn.engine.url.get_backend_name()
     if backend == "postgresql":
         ddl = "ALTER TABLE users ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT FALSE"
     else:
-        # SQLite
         ddl = "ALTER TABLE users ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT 0"
 
-    with engine.begin() as conn:
-        conn.execute(text(ddl))
+    await conn.execute(text(ddl))
 
 
-def _seed_admin_user(db: Session) -> User:
+async def _seed_admin_user(db: AsyncSession) -> User:
     username = os.getenv("AUTH_SEED_USERNAME", "admin")
     email = os.getenv("AUTH_SEED_EMAIL", "admin@local")
 
-    user = db.query(User).filter(User.username == username).first()
+    result = await db.execute(select(User).where(User.username == username))
+    user = result.scalars().first()
     if user:
-        # Ensure existing seed user has admin privileges.
         if not user.is_admin:
             user.is_admin = True
             db.add(user)
-            db.commit()
-            db.refresh(user)
+            await db.commit()
+            await db.refresh(user)
         return user
 
-    # Import lazily to avoid circular imports.
     from app.auth import hash_password
 
     password = os.getenv("AUTH_SEED_PASSWORD", "change-me")
@@ -84,26 +79,25 @@ def _seed_admin_user(db: Session) -> User:
         is_admin=True,
     )
     db.add(user)
-    db.commit()
-    db.refresh(user)
+    await db.commit()
+    await db.refresh(user)
     return user
 
 
-def _seed_sample_user(db: Session) -> User:
+async def _seed_sample_user(db: AsyncSession) -> User:
     username = os.getenv("AUTH_SAMPLE_USERNAME", "sample")
     email = os.getenv("AUTH_SAMPLE_EMAIL", "sample@local")
 
-    user = db.query(User).filter(User.username == username).first()
+    result = await db.execute(select(User).where(User.username == username))
+    user = result.scalars().first()
     if user:
-        # Ensure sample account is always non-admin.
         if user.is_admin:
             user.is_admin = False
             db.add(user)
-            db.commit()
-            db.refresh(user)
+            await db.commit()
+            await db.refresh(user)
         return user
 
-    # Import lazily to avoid circular imports.
     from app.auth import hash_password
 
     password = os.getenv("AUTH_SAMPLE_PASSWORD", "sample")
@@ -114,17 +108,17 @@ def _seed_sample_user(db: Session) -> User:
         is_admin=False,
     )
     db.add(user)
-    db.commit()
-    db.refresh(user)
+    await db.commit()
+    await db.refresh(user)
     return user
 
 
-def _backfill_user_ids(db: Session, admin_user_id: uuid.UUID) -> None:
+async def _backfill_user_ids(db: AsyncSession, admin_user_id: uuid.UUID) -> None:
     uid = str(admin_user_id)
 
-    db.execute(text("UPDATE documents SET user_id = :uid WHERE user_id IS NULL"), {"uid": uid})
+    await db.execute(text("UPDATE documents SET user_id = :uid WHERE user_id IS NULL"), {"uid": uid})
 
-    db.execute(
+    await db.execute(
         text(
             """
             UPDATE rag_configs
@@ -138,7 +132,7 @@ def _backfill_user_ids(db: Session, admin_user_id: uuid.UUID) -> None:
         )
     )
 
-    db.execute(
+    await db.execute(
         text(
             """
             UPDATE chat_messages
@@ -152,21 +146,19 @@ def _backfill_user_ids(db: Session, admin_user_id: uuid.UUID) -> None:
         )
     )
 
-    # Any orphan rows get assigned to seed admin to keep data reachable.
-    db.execute(text("UPDATE rag_configs SET user_id = :uid WHERE user_id IS NULL"), {"uid": uid})
-    db.execute(text("UPDATE chat_messages SET user_id = :uid WHERE user_id IS NULL"), {"uid": uid})
-    db.commit()
+    await db.execute(text("UPDATE rag_configs SET user_id = :uid WHERE user_id IS NULL"), {"uid": uid})
+    await db.execute(text("UPDATE chat_messages SET user_id = :uid WHERE user_id IS NULL"), {"uid": uid})
+    await db.commit()
 
 
-def run_bootstrap_migrations(engine: Engine, db: Session) -> None:
-    # Ensure ownership columns exist for pre-auth databases.
-    for table in ("documents", "rag_configs", "chat_messages"):
-        _add_user_id_column_if_missing(engine, table)
+async def run_bootstrap_migrations(engine: AsyncEngine, db: AsyncSession) -> None:
+    async with engine.begin() as conn:
+        for table in ("documents", "rag_configs", "chat_messages"):
+            await _add_user_id_column_if_missing(conn, table)
 
-    # Add missing password_reset_count column if needed
-    _add_password_reset_count_if_missing(engine)
-    _add_is_admin_if_missing(engine)
+        await _add_password_reset_count_if_missing(conn)
+        await _add_is_admin_if_missing(conn)
 
-    admin_user = _seed_admin_user(db)
-    _seed_sample_user(db)
-    _backfill_user_ids(db, admin_user.id)
+    admin_user = await _seed_admin_user(db)
+    await _seed_sample_user(db)
+    await _backfill_user_ids(db, admin_user.id)

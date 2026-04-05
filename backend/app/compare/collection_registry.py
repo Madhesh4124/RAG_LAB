@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import importlib
 import shutil
+import threading
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -22,18 +23,15 @@ from app.services.embedding.huggingface_api_embedder import HuggingFaceAPIEmbedd
 from app.services.embedding.google_embedder import GoogleEmbedder
 from app.services.embedding.nvidia_embedder import NvidiaEmbedder
 
-_registry: Dict[str, Any] = {}
 _PERSIST_DIR = Path(__file__).resolve().parents[2] / "chroma_store"
+_EMBEDDER_CACHE: dict[tuple[str, str], "_EmbeddingAdapter"] = {}
+_EMBEDDER_CACHE_LOCK = threading.Lock()
 
 
 def _scoped_collection_name(collection_name: str, user_scope: str | None = None) -> str:
     if not user_scope:
         return collection_name
     return f"user_{user_scope}_{collection_name}"
-
-
-def _registry_key(collection_name: str, user_scope: str | None = None) -> str:
-    return _scoped_collection_name(collection_name, user_scope)
 
 
 class _EmbeddingAdapter:
@@ -58,21 +56,32 @@ class _EmbeddingAdapter:
 
 
 def _load_embedder(embedding_provider: str, embedding_model: str):
+    cache_key = (embedding_provider, embedding_model)
+    with _EMBEDDER_CACHE_LOCK:
+        cached = _EMBEDDER_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     if embedding_provider == "nvidia":
         model_name = embedding_model or "nvidia/nv-embed-v1"
-        return _EmbeddingAdapter(NvidiaEmbedder(model=model_name))
-    if embedding_provider == "huggingface":
+        embedder = _EmbeddingAdapter(NvidiaEmbedder(model=model_name))
+    elif embedding_provider == "huggingface":
         model_name = embedding_model or "sentence-transformers/all-MiniLM-L6-v2"
         try:
             from langchain_huggingface import HuggingFaceEmbeddings
 
-            return _EmbeddingAdapter(HuggingFaceEmbeddings(model_name=model_name))
+            embedder = _EmbeddingAdapter(HuggingFaceEmbeddings(model_name=model_name))
         except Exception:
-            return _EmbeddingAdapter(HuggingFaceAPIEmbedder(model=model_name))
-    if embedding_provider == "google":
+            embedder = _EmbeddingAdapter(HuggingFaceAPIEmbedder(model=model_name))
+    elif embedding_provider == "google":
         model_name = embedding_model or "models/gemini-embedding-2-preview"
-        return _EmbeddingAdapter(GoogleEmbedder(model=model_name))
-    raise ValueError(f"Unsupported embedding provider: {embedding_provider}")
+        embedder = _EmbeddingAdapter(GoogleEmbedder(model=model_name))
+    else:
+        raise ValueError(f"Unsupported embedding provider: {embedding_provider}")
+
+    with _EMBEDDER_CACHE_LOCK:
+        _EMBEDDER_CACHE.setdefault(cache_key, embedder)
+        return _EMBEDDER_CACHE[cache_key]
 
 
 def get_or_load_collection(
@@ -82,16 +91,12 @@ def get_or_load_collection(
     user_scope: str | None = None,
 ) -> Any:
     scoped_collection_name = _scoped_collection_name(collection_name, user_scope)
-    key = _registry_key(collection_name, user_scope)
-    if key not in _registry:
-        embedder = _load_embedder(embedding_provider, embedding_model)
-        vectorstore = Chroma(
-            collection_name=scoped_collection_name,
-            embedding_function=embedder,
-            persist_directory=str(_PERSIST_DIR),
-        )
-        _registry[key] = vectorstore
-    return _registry[key]
+    embedder = _load_embedder(embedding_provider, embedding_model)
+    return Chroma(
+        collection_name=scoped_collection_name,
+        embedding_function=embedder,
+        persist_directory=str(_PERSIST_DIR),
+    )
 
 
 def collection_exists(
@@ -101,19 +106,16 @@ def collection_exists(
     user_scope: str | None = None,
 ) -> bool:
     try:
-        vectorstore = get_or_load_collection(
-            collection_name,
-            embedding_provider,
-            embedding_model,
-            user_scope=user_scope,
-        )
+        vectorstore = get_or_load_collection(collection_name, embedding_provider, embedding_model, user_scope=user_scope)
         return int(vectorstore._collection.count()) > 0
     except Exception:
         return False
 
 
 def clear_collection_registry() -> None:
-    _registry.clear()
+    with _EMBEDDER_CACHE_LOCK:
+        _EMBEDDER_CACHE.clear()
+    return None
 
 
 def clear_compare_chroma_store() -> None:

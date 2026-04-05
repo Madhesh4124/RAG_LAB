@@ -3,6 +3,7 @@ import { BrowserRouter, Navigate, NavLink, Route, Routes, useLocation, useNaviga
 import Setup   from "./pages/Setup";
 import Preview from "./pages/Preview";
 import Compare from "./pages/Compare";
+import Chat from "./pages/Chat";
 import QuickChat from "./pages/QuickChat";
 import Admin from "./pages/Admin";
 import Login from "./pages/Login";
@@ -83,7 +84,7 @@ export default function App() {
   <Route path="/preview" element={<ProtectedRoute><Preview /></ProtectedRoute>} />
   <Route path="/compare" element={<ProtectedRoute><Compare /></ProtectedRoute>} />
   <Route path="/chat" element={<ProtectedRoute><QuickChat /></ProtectedRoute>} />
-  <Route path="/custom-chat" element={<Navigate to="/setup" replace />} />
+  <Route path="/custom-chat" element={<ProtectedRoute><Chat /></ProtectedRoute>} />
   <Route path="/admin" element={<AdminRoute><Admin /></AdminRoute>} />
   <Route path="*" element={<Navigate to="/login" replace />} />
   </Routes>

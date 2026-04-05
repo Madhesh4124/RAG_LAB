@@ -1,14 +1,15 @@
 import logging
 import os
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from datetime import datetime, timezone
 
-from app.database import engine, Base, SessionLocal
+from app.database import engine, Base, AsyncSessionLocal
 from app.bootstrap_migrations import run_bootstrap_migrations
 from app.models.user import User  # noqa: F401 - imported so SQLAlchemy registers table metadata
+from app.models.rate_limit import RateLimitEvent  # noqa: F401 - registers rate limit table metadata
 from app.api.auth import router as auth_router
 from app.api.admin import router as admin_router
 from app.api.documents import router as documents_router
@@ -19,7 +20,7 @@ from app.api.compare import router as compare_router
 from app.api.evaluation import router as evaluation_router
 from app.api.metrics import router as metrics_router
 from app.compare.router import router as compare_module_router
-from app.services.rate_limiter import get_rate_limiter
+from app.services.rate_limiter import DatabaseRateLimiter
 from app.services.email_service import EmailService
 
 # Suppress noisy Chroma telemetry errors (version mismatch with posthog)
@@ -29,20 +30,42 @@ logging.getLogger("chromadb.telemetry.product.posthog").setLevel(logging.CRITICA
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+def _configure_third_party_logging() -> None:
+    verbose_compare_logs = os.getenv("COMPARE_VERBOSE_LOGS", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if verbose_compare_logs:
+        return
+
+    # Reduce noisy informational logs from model/bootstrap internals.
+    quiet_loggers = (
+        "sentence_transformers",
+        "transformers",
+        "huggingface_hub",
+        "httpx",
+        "httpcore",
+    )
+    for name in quiet_loggers:
+        logging.getLogger(name).setLevel(logging.WARNING)
+
+
+_configure_third_party_logging()
+
 email_service = EmailService()
-rate_limiter = get_rate_limiter()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Initializing database tables...")
-    Base.metadata.create_all(bind=engine)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
-    db = SessionLocal()
-    try:
-        run_bootstrap_migrations(engine, db)
-    finally:
-        db.close()
+    async with AsyncSessionLocal() as db:
+        await run_bootstrap_migrations(engine, db)
 
     # Startup event to notify users logging cleanly
     logger.info("RAG Lab API is ready")
@@ -89,19 +112,20 @@ async def global_exception_handler(request: Request, exc: Exception):
         try:
             from app.auth import decode_session_token
             from app.models.user import User
+            from app.database import AsyncSessionLocal
             from sqlalchemy import select
             
             token = request.cookies.get("raglab_session")
             if token:
                 try:
                     user_id = decode_session_token(token)
-                    db = SessionLocal()
-                    stmt = select(User).where(User.id == user_id)
-                    user = db.execute(stmt).scalars().first()
-                    if user:
-                        user_email = user.email
-                        username = user.username
-                    db.close()
+                    async with AsyncSessionLocal() as db:
+                        stmt = select(User).where(User.id == user_id)
+                        result = await db.execute(stmt)
+                        user = result.scalars().first()
+                        if user:
+                            user_email = user.email
+                            username = user.username
                 except:
                     pass
         except:
@@ -109,16 +133,17 @@ async def global_exception_handler(request: Request, exc: Exception):
         
         # Send alert email to admin
         logger.warning(f"Rate limit error (429) for user {username} ({user_email})")
-        email_service.send_rate_limit_alert(
+        await asyncio.to_thread(
+            email_service.send_rate_limit_alert,
             user_email=user_email,
             username=username,
             api_error="429 Too Many Requests",
-            error_message=str(exc)
+            error_message=str(exc),
         )
         
         # Log the error event
-        error_event = rate_limiter.record_rate_limit_error(
-            user_id=None,
+        error_event = DatabaseRateLimiter.record_rate_limit_error(
+            scope_key="unknown",
             call_type="api",
             error_message=str(exc)
         )

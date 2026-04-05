@@ -2,6 +2,7 @@ import os
 import uuid
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 from sqlalchemy import create_engine
@@ -18,6 +19,40 @@ from app.models.rag_config import RAGConfig
 from app.models.user import User
 
 
+class AsyncSessionAdapter:
+    """Adapter that lets async route/unit logic run against sync test sessions."""
+
+    def __init__(self, sync_session):
+        self._sync = sync_session
+
+    async def execute(self, *args, **kwargs):
+        return self._sync.execute(*args, **kwargs)
+
+    async def commit(self):
+        self._sync.commit()
+
+    async def refresh(self, instance):
+        self._sync.refresh(instance)
+
+    async def flush(self):
+        self._sync.flush()
+
+    async def delete(self, instance):
+        self._sync.delete(instance)
+
+    async def rollback(self):
+        self._sync.rollback()
+
+    async def get(self, *args, **kwargs):
+        return self._sync.get(*args, **kwargs)
+
+    def add(self, instance):
+        self._sync.add(instance)
+
+    def add_all(self, instances):
+        self._sync.add_all(instances)
+
+
 @pytest.fixture
 def db_session(monkeypatch):
     monkeypatch.setenv("AUTH_SECRET_KEY", "test-secret")
@@ -32,6 +67,11 @@ def db_session(monkeypatch):
     finally:
         db.close()
         engine.dispose()
+
+
+@pytest.fixture
+def async_db_session(db_session):
+    return AsyncSessionAdapter(db_session)
 
 
 @pytest.fixture

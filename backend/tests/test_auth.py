@@ -39,17 +39,29 @@ def test_session_token_roundtrip(monkeypatch):
     assert decoded == user_id
 
 
-def test_get_current_user_requires_cookie(db_session):
+@pytest.mark.anyio
+async def test_get_current_user_requires_cookie():
     req = Request({"type": "http", "method": "GET", "path": "/", "headers": []})
     with pytest.raises(HTTPException) as exc:
-        get_current_user(req, db_session)
+        await get_current_user(req)
     assert exc.value.status_code == 401
 
 
-def test_get_current_user_resolves_user(db_session, user_a, monkeypatch):
+@pytest.mark.anyio
+async def test_get_current_user_resolves_user(async_db_session, user_a, monkeypatch):
     monkeypatch.setenv("AUTH_SECRET_KEY", "test-secret")
+
+    class _SessionContext:
+        async def __aenter__(self):
+            return async_db_session
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr("app.auth.AsyncSessionLocal", lambda: _SessionContext())
+
     token = create_session_token(user_a.id)
     req = _request_with_cookie(token)
-    current = get_current_user(req, db_session)
+    current = await get_current_user(req)
     assert current.id == user_a.id
     assert current.username == "user_a"

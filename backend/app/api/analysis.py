@@ -1,7 +1,7 @@
 import uuid
 import os
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.database import get_db
@@ -15,10 +15,10 @@ from app.services.analysis import RetrievalAnalyzer
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 
 @router.get("/{message_id}")
-def analyze_message(message_id: uuid.UUID, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def analyze_message(message_id: uuid.UUID, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     # 1. Fetch the message natively mapped
     stmt_msg = select(ChatMessage).where(ChatMessage.id == message_id, ChatMessage.user_id == current_user.id)
-    msg = db.execute(stmt_msg).scalars().first()
+    msg = (await db.execute(stmt_msg)).scalars().first()
     if not msg:
         raise HTTPException(status_code=404, detail="Message not found")
         
@@ -27,14 +27,14 @@ def analyze_message(message_id: uuid.UUID, current_user: User = Depends(get_curr
         
     # 2. Fetch associated metrics (if any timer payloads caught mapped traces securely)
     stmt = select(Metrics).where(Metrics.message_id == message_id)
-    metrics_record = db.execute(stmt).scalars().first()
+    metrics_record = (await db.execute(stmt)).scalars().first()
 
     eval_stmt = (
         select(EvaluationResult)
         .where(EvaluationResult.message_id == message_id)
         .order_by(EvaluationResult.created_at.desc())
     )
-    eval_record = db.execute(eval_stmt).scalars().first()
+    eval_record = (await db.execute(eval_stmt)).scalars().first()
     
     # 3. Parse retrieved chunks and instantly leverage our abstract Analyzer class seamlessly
     chunks_data = msg.retrieved_chunks or []

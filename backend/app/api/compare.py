@@ -3,7 +3,7 @@ import os
 from copy import deepcopy
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Body
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.database import get_db
@@ -21,19 +21,19 @@ router = APIRouter(prefix="/api/compare", tags=["compare"])
 
 @router.post("")
 @router.post("/")
-def compare_configs(
+async def compare_configs(
     document_id: uuid.UUID = Body(...),
     query: str = Body(...),
     config_ids: Optional[List[uuid.UUID]] = Body(None),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Compare the same query across multiple RAG configurations.
     If config_ids not provided, returns all configs for the document.
     """
     doc_stmt = select(Document).where(Document.id == document_id, Document.user_id == current_user.id)
-    doc = db.execute(doc_stmt).scalars().first()
+    doc = (await db.execute(doc_stmt)).scalars().first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     
@@ -46,7 +46,7 @@ def compare_configs(
                 RAGConfig.user_id == current_user.id,
                 RAGConfig.document_id == document_id,
             )
-            cfg = db.execute(cfg_stmt).scalars().first()
+            cfg = (await db.execute(cfg_stmt)).scalars().first()
             if cfg:
                 configs.append(cfg)
     else:
@@ -55,7 +55,7 @@ def compare_configs(
             RAGConfig.document_id == document_id,
             RAGConfig.user_id == current_user.id,
         )
-        configs = db.execute(stmt).scalars().all()
+        configs = (await db.execute(stmt)).scalars().all()
     
     if not configs:
         return {"results": [], "error": "No configurations found for this document"}
@@ -87,7 +87,7 @@ def compare_configs(
             
             # Index document
             metadata = {"filename": doc.filename, "file_type": doc.file_type}
-            pipeline.index_document(
+            await pipeline.aindex_document(
                 text=doc.content,
                 doc_id=str(document_id),
                 metadata=metadata
@@ -96,7 +96,7 @@ def compare_configs(
             
             # Retrieve chunks
             timer.start("retrieval_time_ms")
-            retrieved_results = pipeline.retrieve(query, top_k=top_k)
+            retrieved_results = await pipeline.aretrieve(query, top_k=top_k)
 
             if similarity_threshold is not None and retrieved_results and isinstance(retrieved_results[0], tuple):
                 retrieved_results = [
@@ -116,7 +116,7 @@ def compare_configs(
             answer = ""
             if pipeline.llm_client and hasattr(pipeline.llm_client, 'llm') and pipeline.llm_client.llm:
                 try:
-                    answer = pipeline.llm_client.generate(query, retrieved_chunks)
+                    answer = await pipeline.llm_client.generate_async(query, retrieved_chunks)
                 except Exception as e:
                     answer = f"LLM generation failed: {str(e)}"
             else:
@@ -179,7 +179,7 @@ def compare_configs(
                 ],
             )
             db.add(assistant_msg)
-            db.flush()
+            await db.flush()
 
             metrics_record = Metrics(
                 message_id=assistant_msg.id,
@@ -192,13 +192,13 @@ def compare_configs(
                 token_count=len(answer.split()),
             )
             db.add(metrics_record)
-            db.commit()
+            await db.commit()
 
             result["message_id"] = str(assistant_msg.id)
             results.append(result)
             
         except Exception as e:
-            db.rollback()
+            await db.rollback()
             # Include error result for this config
             results.append({
                 "configId": str(config.id),

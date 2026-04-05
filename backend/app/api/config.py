@@ -1,7 +1,7 @@
 import uuid
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.database import get_db
@@ -26,7 +26,7 @@ class ApplyBestPresetRequest(BaseModel):
 
 
 @router.get("/best-preset")
-def get_best_preset(current_user: User = Depends(get_current_user)):
+async def get_best_preset(current_user: User = Depends(get_current_user)):
     _ = current_user  # keeps endpoint protected and future-proof for role-scoped presets
     return {
         "name": BEST_PRESET_NAME,
@@ -36,13 +36,13 @@ def get_best_preset(current_user: User = Depends(get_current_user)):
 
 
 @router.post("/best-preset/apply", response_model=RAGConfigResponse)
-def apply_best_preset(
+async def apply_best_preset(
     payload: ApplyBestPresetRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     doc_stmt = select(Document).where(Document.id == payload.document_id, Document.user_id == current_user.id)
-    owned_doc = db.execute(doc_stmt).scalars().first()
+    owned_doc = (await db.execute(doc_stmt)).scalars().first()
     if not owned_doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
@@ -55,18 +55,18 @@ def apply_best_preset(
         is_active=True,
     )
     db.add(new_config)
-    db.commit()
-    db.refresh(new_config)
+    await db.commit()
+    await db.refresh(new_config)
     return new_config
 
 @router.post("/", response_model=RAGConfigResponse)
-def create_config(
+async def create_config(
     config_in: RAGConfigCreate,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     doc_stmt = select(Document).where(Document.id == config_in.document_id, Document.user_id == current_user.id)
-    owned_doc = db.execute(doc_stmt).scalars().first()
+    owned_doc = (await db.execute(doc_stmt)).scalars().first()
     if not owned_doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
@@ -78,38 +78,38 @@ def create_config(
         is_active=config_in.is_active
     )
     db.add(new_config)
-    db.commit()
-    db.refresh(new_config)
+    await db.commit()
+    await db.refresh(new_config)
     return new_config
 
 @router.get("/list", response_model=List[RAGConfigResponse])
-def list_configs(
+async def list_configs(
     doc_id: Optional[uuid.UUID] = Query(None),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     stmt = select(RAGConfig).where(RAGConfig.user_id == current_user.id)
     if doc_id:
         stmt = stmt.where(RAGConfig.document_id == doc_id)
-    return db.execute(stmt).scalars().all()
+    return (await db.execute(stmt)).scalars().all()
 
 @router.get("/{config_id}", response_model=RAGConfigResponse)
-def get_config(config_id: uuid.UUID, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def get_config(config_id: uuid.UUID, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     stmt = select(RAGConfig).where(RAGConfig.id == config_id, RAGConfig.user_id == current_user.id)
-    config_obj = db.execute(stmt).scalars().first()
+    config_obj = (await db.execute(stmt)).scalars().first()
     if not config_obj:
         raise HTTPException(status_code=404, detail="Config not found")
     return config_obj
 
 @router.get("/{config_id}/export")
-def export_config(
+async def export_config(
     config_id: uuid.UUID,
     background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     stmt = select(RAGConfig).where(RAGConfig.id == config_id, RAGConfig.user_id == current_user.id)
-    config_obj = db.execute(stmt).scalars().first()
+    config_obj = (await db.execute(stmt)).scalars().first()
     if not config_obj:
         raise HTTPException(status_code=404, detail="Config not found")
         
@@ -135,10 +135,10 @@ async def import_config(
     name: str = Form(...),
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     doc_stmt = select(Document).where(Document.id == document_id, Document.user_id == current_user.id)
-    owned_doc = db.execute(doc_stmt).scalars().first()
+    owned_doc = (await db.execute(doc_stmt)).scalars().first()
     if not owned_doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
@@ -159,7 +159,7 @@ async def import_config(
         is_active=True
     )
     db.add(new_config)
-    db.commit()
-    db.refresh(new_config)
+    await db.commit()
+    await db.refresh(new_config)
     
     return new_config

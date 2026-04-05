@@ -1,7 +1,7 @@
 import uuid
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, status
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.database import get_db
@@ -15,11 +15,11 @@ router = APIRouter(prefix="/api/documents", tags=["documents"])
 
 
 @router.get("/list", response_model=List[DocumentListItemResponse])
-def list_documents(
+async def list_documents(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     stmt = (
         select(Document)
@@ -28,15 +28,15 @@ def list_documents(
         .offset(skip)
         .limit(limit)
     )
-    return db.execute(stmt).scalars().all()
+    return (await db.execute(stmt)).scalars().all()
 
 
 @router.get("/search", response_model=List[DocumentListItemResponse])
-def search_documents(
+async def search_documents(
     query: str = Query(..., min_length=1),
     limit: int = Query(50, ge=1, le=200),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     stmt = (
         select(Document)
@@ -44,14 +44,14 @@ def search_documents(
         .order_by(Document.upload_date.desc())
         .limit(limit)
     )
-    return db.execute(stmt).scalars().all()
+    return (await db.execute(stmt)).scalars().all()
 
 @router.post("/upload", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED)
 async def upload_document(
     file: UploadFile = File(...),
     config: Optional[str] = Form(None),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     try:
         processed_data = await FileProcessor.process_upload(file)
@@ -66,27 +66,27 @@ async def upload_document(
         file_size=processed_data["file_size"]
     )
     db.add(new_doc)
-    db.commit()
-    db.refresh(new_doc)
+    await db.commit()
+    await db.refresh(new_doc)
     return new_doc
 
 @router.get("/{doc_id}", response_model=DocumentResponse)
-def get_document(doc_id: uuid.UUID, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def get_document(doc_id: uuid.UUID, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     stmt = select(Document).where(Document.id == doc_id, Document.user_id == current_user.id)
-    doc = db.execute(stmt).scalars().first()
+    doc = (await db.execute(stmt)).scalars().first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     return doc
 
 @router.get("/{doc_id}/chunks")
-def preview_chunks(
+async def preview_chunks(
     doc_id: uuid.UUID,
     config_id: Optional[uuid.UUID] = Query(None),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     doc_stmt = select(Document).where(Document.id == doc_id, Document.user_id == current_user.id)
-    doc = db.execute(doc_stmt).scalars().first()
+    doc = (await db.execute(doc_stmt)).scalars().first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     
@@ -98,7 +98,7 @@ def preview_chunks(
         RAGConfig.user_id == current_user.id,
         RAGConfig.document_id == doc_id,
     )
-    config = db.execute(cfg_stmt).scalars().first()
+    config = (await db.execute(cfg_stmt)).scalars().first()
     if not config:
         raise HTTPException(status_code=404, detail="Config not found")
         
@@ -147,11 +147,11 @@ def preview_chunks(
         raise HTTPException(status_code=500, detail=f"Failed to preview chunks: {str(e)}")
 
 @router.delete("/{doc_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_document(doc_id: uuid.UUID, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def delete_document(doc_id: uuid.UUID, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     stmt = select(Document).where(Document.id == doc_id, Document.user_id == current_user.id)
-    doc = db.execute(stmt).scalars().first()
+    doc = (await db.execute(stmt)).scalars().first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
-    db.delete(doc)
-    db.commit()
+    await db.delete(doc)
+    await db.commit()
     return None

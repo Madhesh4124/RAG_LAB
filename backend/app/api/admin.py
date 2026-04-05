@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
 from pathlib import Path
@@ -162,32 +163,33 @@ class ChromaDeleteResponse(BaseModel):
 
 
 @router.get("/chroma", response_model=List[ChromaRootDetail])
-def list_chroma_roots(current_user: User = Depends(require_admin)):
+async def list_chroma_roots(current_user: User = Depends(require_admin)):
     _ = current_user
     roots = []
     for root in _storage_roots():
+        collections = await asyncio.to_thread(_list_root_collections, root)
         roots.append(
             ChromaRootDetail(
                 root_path=str(root),
-                collections=[ChromaCollectionDetail(**collection) for collection in _list_root_collections(root)],
+                collections=[ChromaCollectionDetail(**collection) for collection in collections],
             )
         )
     return roots
 
 
 @router.get("/chroma/collections/{collection_name}", response_model=List[ChromaRootDetail])
-def view_collection(collection_name: str, current_user: User = Depends(require_admin)):
+async def view_collection(collection_name: str, current_user: User = Depends(require_admin)):
     _ = current_user
     roots: List[ChromaRootDetail] = []
     for root in _storage_roots():
-        collections = [collection for collection in _list_root_collections(root) if collection["name"] == collection_name]
+        collections = [collection for collection in await asyncio.to_thread(_list_root_collections, root) if collection["name"] == collection_name]
         if collections:
             roots.append(ChromaRootDetail(root_path=str(root), collections=[ChromaCollectionDetail(**collection) for collection in collections]))
     return roots
 
 
 @router.delete("/chroma/collections/{collection_name}", response_model=ChromaDeleteResponse)
-def delete_collection(
+async def delete_collection(
     collection_name: str,
     root_path: Optional[str] = Query(None),
     current_user: User = Depends(require_admin),
@@ -198,8 +200,7 @@ def delete_collection(
 
     for root in roots:
         try:
-            client = _collection_client(root)
-            client.delete_collection(name=collection_name)
+            await asyncio.to_thread(lambda: _collection_client(root).delete_collection(name=collection_name))
             deleted.append(f"{root}:{collection_name}")
         except Exception:
             continue
@@ -211,7 +212,7 @@ def delete_collection(
 
 
 @router.delete("/chroma/root", response_model=ChromaDeleteResponse)
-def clear_root(
+async def clear_root(
     root_path: Optional[str] = Query(None),
     current_user: User = Depends(require_admin),
 ):
@@ -219,17 +220,17 @@ def clear_root(
     roots = [Path(root_path).resolve()] if root_path else _storage_roots()
     deleted: List[str] = []
 
-    _clear_runtime_caches()
+    await asyncio.to_thread(_clear_runtime_caches)
 
     for target_root in roots:
         try:
-            _clear_collections_in_root(target_root)
+            await asyncio.to_thread(_clear_collections_in_root, target_root)
         except Exception:
             pass
 
         if target_root.exists():
             try:
-                shutil.rmtree(target_root)
+                await asyncio.to_thread(shutil.rmtree, target_root)
             except Exception:
                 # If filesystem removal is blocked by locks, keep folder but collections
                 # are already deleted through Chroma API.

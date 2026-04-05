@@ -3,7 +3,7 @@ from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.auth import get_current_user
@@ -17,24 +17,24 @@ router = APIRouter(prefix="/api/metrics", tags=["metrics"])
 
 
 @router.get("/summary")
-def get_metrics_summary(
+async def get_metrics_summary(
     document_id: uuid.UUID = Query(...),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
-    configs = db.execute(
+    configs = (await db.execute(
         select(RAGConfig).where(RAGConfig.document_id == document_id, RAGConfig.user_id == current_user.id)
-    ).scalars().all()
+    )).scalars().all()
     if not configs:
         raise HTTPException(status_code=404, detail="No configs found for document")
 
     config_map = {cfg.id: cfg.name for cfg in configs}
 
-    all_messages = db.execute(
+    all_messages = (await db.execute(
         select(ChatMessage)
         .where(ChatMessage.document_id == document_id, ChatMessage.user_id == current_user.id)
         .order_by(ChatMessage.timestamp)
-    ).scalars().all()
+    )).scalars().all()
 
     assistant_messages = [msg for msg in all_messages if msg.role == "assistant"]
 
@@ -46,14 +46,14 @@ def get_metrics_summary(
         elif msg.role == "assistant":
             paired_query_by_assistant[msg.id] = latest_user_by_config.get(msg.config_id)
 
-    metric_rows = db.execute(
+    metric_rows = (await db.execute(
         select(Metrics).where(Metrics.message_id.in_([msg.id for msg in assistant_messages]))
-    ).scalars().all() if assistant_messages else []
+    )).scalars().all() if assistant_messages else []
     metric_map = {row.message_id: row for row in metric_rows}
 
-    eval_rows = db.execute(
+    eval_rows = (await db.execute(
         select(EvaluationResult).where(EvaluationResult.message_id.in_([msg.id for msg in assistant_messages]))
-    ).scalars().all() if assistant_messages else []
+    )).scalars().all() if assistant_messages else []
     eval_map = {}
     for row in eval_rows:
         current = eval_map.get(row.message_id)

@@ -7,9 +7,9 @@ import bcrypt
 from fastapi import Depends, HTTPException, Request, Response, status
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
+from app.database import AsyncSessionLocal, get_db
 from app.models.user import User, PasswordResetToken
 
 SESSION_COOKIE_NAME = "raglab_session"
@@ -120,7 +120,7 @@ def clear_auth_cookie(response: Response) -> None:
     )
 
 
-def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
+async def get_current_user(request: Request) -> User:
     token = request.cookies.get(SESSION_COOKIE_NAME)
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
@@ -130,8 +130,10 @@ def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
     except BadSignature:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session")
 
-    stmt = select(User).where(User.id == user_id)
-    user = db.execute(stmt).scalars().first()
+    async with AsyncSessionLocal() as db:
+        stmt = select(User).where(User.id == user_id)
+        result = await db.execute(stmt)
+        user = result.scalars().first()
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
     return user

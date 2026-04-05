@@ -54,4 +54,5 @@ def test_pipeline_manager_cache_key_is_user_scoped(monkeypatch):
     p1_again = pipeline_manager.PipelineManager.get_pipeline("user-a:cfg-1", {"x": 1})
 
     assert p1 is not p2
-    assert p1 is p1_again
+    # Stateless manager now creates a fresh pipeline on every call.
+    assert p1 is not p1_again

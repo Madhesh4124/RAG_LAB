@@ -1,12 +1,13 @@
 import uuid
+import asyncio
 from copy import deepcopy
 from typing import Any, List
 from fastapi import APIRouter, Depends, HTTPException, Body
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
 
-from app.database import get_db
+from app.database import AsyncSessionLocal, get_db
 from app.auth import get_current_user
 from app.models.user import User
 from app.models.document import Document
@@ -14,6 +15,7 @@ from app.models.rag_config import RAGConfig
 from app.models.chat import ChatMessage, ChatMessageResponse
 from app.models.metrics import Metrics
 from app.utils.timing import PipelineTimer
+from app.services.rate_limiter import DatabaseRateLimiter, get_rate_limiter
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -24,8 +26,8 @@ def _normalize_scores_for_display(scores: List[float]) -> List[float]:
         return []
 
     cleaned = [float(s) for s in scores]
-
-    # If all values are effectively zero, keep rank order visible instead of 0.0% for all.
+    rate_limiter: DatabaseRateLimiter = Depends(get_rate_limiter),
+    db: AsyncSession = Depends(get_db),
     if all(abs(s) < 1e-12 for s in cleaned):
         n = len(cleaned)
         if n == 1:
@@ -72,10 +74,10 @@ class PrepareChatRequest(BaseModel):
 
 
 @router.post("/prepare")
-def prepare_chat_session(
+async def prepare_chat_session(
     payload: PrepareChatRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     from app.services.pipeline_manager import PipelineManager
 
@@ -95,8 +97,8 @@ def prepare_chat_session(
         RAGConfig.document_id == payload.document_id,
     )
 
-    docs = db.execute(doc_stmt).scalars().all()
-    config = db.execute(cfg_stmt).scalars().first()
+    docs = (await db.execute(doc_stmt)).scalars().all()
+    config = (await db.execute(cfg_stmt)).scalars().first()
 
     if not docs or len(docs) != len(normalized_doc_ids):
         raise HTTPException(status_code=404, detail="Document not found")
@@ -111,7 +113,7 @@ def prepare_chat_session(
 
     pipeline = PipelineManager.get_pipeline(f"{current_user.id}:{config.id}", pipeline_config)
     for doc in docs:
-        pipeline.index_document(
+        await pipeline.aindex_document(
             text=doc.content,
             doc_id=str(doc.id),
             metadata={"filename": doc.filename, "file_type": doc.file_type},
@@ -125,20 +127,20 @@ def prepare_chat_session(
     }
 
 @router.post("/")
-def chat_endpoint(
+async def chat_endpoint(
     query: str = Body(...),
     doc_id: uuid.UUID = Body(...),
     config_id: uuid.UUID = Body(...),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    rate_limiter: DatabaseRateLimiter = Depends(get_rate_limiter),
 ):
     from app.api.evaluation import score_message
     from app.services.pipeline_manager import PipelineManager
-    from app.services.rate_limiter import get_rate_limiter
     
     # Check rate limit for LLM calls
-    rate_limiter = get_rate_limiter()
-    allowed, remaining, error_msg = rate_limiter.check_rate_limit(current_user.id, "llm")
+    scope_key = rate_limiter.build_scope_key(user_id=current_user.id)
+    allowed, remaining, error_msg = await rate_limiter.check_rate_limit(scope_key, "llm")
     if not allowed:
         raise HTTPException(status_code=429, detail=error_msg)
 
@@ -148,8 +150,8 @@ def chat_endpoint(
         RAGConfig.user_id == current_user.id,
         RAGConfig.document_id == doc_id,
     )
-    doc = db.execute(doc_stmt).scalars().first()
-    config = db.execute(cfg_stmt).scalars().first()
+    doc = (await db.execute(doc_stmt)).scalars().first()
+    config = (await db.execute(cfg_stmt)).scalars().first()
     
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -171,7 +173,7 @@ def chat_endpoint(
         similarity_threshold = retrieval_cfg.get("similarity_threshold", None)
 
         timer.start("chunking_time_ms")
-        pipeline.index_document(
+        await pipeline.aindex_document(
             text=doc.content,
             doc_id=str(doc_id),
             metadata={"filename": doc.filename, "file_type": doc.file_type}
@@ -179,7 +181,7 @@ def chat_endpoint(
         timer.stop("chunking_time_ms")
 
         timer.start("retrieval_time_ms")
-        retrieved_results = pipeline.retrieve(query, top_k=top_k)
+        retrieved_results = await pipeline.aretrieve(query, top_k=top_k)
 
         if similarity_threshold is not None and retrieved_results and isinstance(retrieved_results[0], tuple):
             retrieved_results = [
@@ -196,9 +198,9 @@ def chat_endpoint(
             
         timer.start("llm_time_ms")
         try:
-            answer = pipeline.generate(query, retrieved_chunks_only)
+            answer = await pipeline.agenerate(query, retrieved_chunks_only)
             # Record successful LLM call
-            rate_limiter.record_call(current_user.id, "llm")
+            await rate_limiter.record_call(scope_key, "llm", current_user.id)
         except Exception:
             answer = _fallback_answer_from_chunks(query, retrieved_chunks_only)
         finally:
@@ -259,7 +261,7 @@ def chat_endpoint(
     chunk_scores = [float(chunk.get("score", 0.0)) for chunk in retrieved_chunks]
     avg_similarity = (sum(chunk_scores) / len(chunk_scores)) if chunk_scores else 0.0
 
-    db.flush()
+    await db.flush()
     metrics_record = Metrics(
         message_id=assistant_msg.id,
         chunking_time_ms=timings["chunking_time_ms"],
@@ -285,8 +287,8 @@ def chat_endpoint(
         # Evaluation should not block normal chat responses.
         pass
 
-    db.commit()
-    db.refresh(assistant_msg)
+    await db.commit()
+    await db.refresh(assistant_msg)
 
     return {
         "answer": answer,
@@ -305,17 +307,16 @@ async def chat_stream_endpoint(
     doc_ids: List[uuid.UUID] | None = Body(None),
     config_id: uuid.UUID = Body(...),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
 ):
     """Streaming version for better perceived latency."""
     from app.services.pipeline_manager import PipelineManager
-    from app.services.rate_limiter import get_rate_limiter
-    
-    # Check rate limit for LLM calls
-    rate_limiter = get_rate_limiter()
-    allowed, remaining, error_msg = rate_limiter.check_rate_limit(current_user.id, "llm")
-    if not allowed:
-        raise HTTPException(status_code=429, detail=error_msg)
+    # Check rate limit for LLM calls using a short-lived DB session.
+    scope_key = f"user:{current_user.id}"
+    async with AsyncSessionLocal() as limiter_db:
+        limiter = DatabaseRateLimiter(limiter_db)
+        allowed, remaining, error_msg = await limiter.check_rate_limit(scope_key, "llm")
+        if not allowed:
+            raise HTTPException(status_code=429, detail=error_msg)
 
     requested_ids = doc_ids or [doc_id]
     normalized_ids = []
@@ -332,8 +333,9 @@ async def chat_stream_endpoint(
         RAGConfig.user_id == current_user.id,
         RAGConfig.document_id == doc_id,
     )
-    docs = db.execute(doc_stmt).scalars().all()
-    config = db.execute(cfg_stmt).scalars().first()
+    async with AsyncSessionLocal() as read_db:
+        docs = (await read_db.execute(doc_stmt)).scalars().all()
+        config = (await read_db.execute(cfg_stmt)).scalars().first()
     
     if not docs or len(docs) != len(normalized_ids) or not config:
         raise HTTPException(status_code=404, detail="Resource not found")
@@ -348,100 +350,101 @@ async def chat_stream_endpoint(
     similarity_threshold = float(retrieval_cfg.get("similarity_threshold", 0.0))
 
     async def event_generator():
-        # 1. Notify immediately; start indexing inside generator so response begins right away
-        missing_doc_ids = [str(item.id) for item in docs if str(item.id) not in pipeline._indexed_doc_ids]
-        if missing_doc_ids:
-            _msg = json.dumps({'type': 'status', 'message': f'Indexing {len(missing_doc_ids)} document(s)…'})
-            yield f"data: {_msg}\n\n"
-
-        for doc in docs:
-            pipeline.index_document(doc.content, str(doc.id), {"filename": doc.filename, "file_type": doc.file_type})
-
-        _msg2 = json.dumps({'type': 'status', 'message': 'Retrieving relevant chunks…'})
-        yield f"data: {_msg2}\n\n"
-        results = pipeline.retrieve(query, top_k=top_k)
-
-        if similarity_threshold > 0 and results and isinstance(results[0], tuple):
-            filtered = [(c, s) for c, s in results if s >= similarity_threshold]
-            # Safety: never filter out everything — fall back to unfiltered top results
-            results = filtered if filtered else results
-
-        chunks = [res[0] if isinstance(res, tuple) else res for res in results]
-        raw_scores = [float(res[1]) if isinstance(res, tuple) else float(getattr(res, "score", 0.0)) for res in results]
-        scores = _normalize_scores_for_display(raw_scores)
-
-        # 2. Send full chunk text + score
-        chunk_meta = [
-            {"text": getattr(c, "text", ""), "score": round(scores[idx], 4)}
-            for idx, c in enumerate(chunks)
-        ]
-        yield f"data: {json.dumps({'type': 'metadata', 'chunks': chunk_meta})}\n\n"
-
-        # 3. Stream generation tokens
-        full_response = ""
-        for token in pipeline.generate_stream(query, chunks):
-            full_response += token
-            yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
-        
-        # Record successful LLM call
-        rate_limiter.record_call(current_user.id, "llm")
-
-        # Notify UI immediately that generation is complete.
-        yield f"data: {json.dumps({'type': 'done'})}\n\n"
-
-        # 4. Persist to DB (non-blocking for UI because done is already sent)
         try:
-            user_msg = ChatMessage(
-                user_id=current_user.id,
-                document_id=doc_id,
-                config_id=config_id,
-                role="user",
-                content=query,
-            )
-            db.add(user_msg)
-            assistant_msg = ChatMessage(
-                user_id=current_user.id,
-                document_id=doc_id,
-                config_id=config_id,
-                role="assistant",
-                content=full_response,
-                retrieved_chunks=[{"text": getattr(c, "text", ""), "score": scores[i]} for i, c in enumerate(chunks)]
-            )
-            db.add(assistant_msg)
-            db.commit()
-        except Exception:
-            pass
+            # 1. Notify immediately; start indexing inside generator so response begins right away
+            yield f"data: {json.dumps({'type': 'status', 'message': f'Indexing {len(docs)} document(s)…'})}\n\n"
+
+            for doc in docs:
+                await pipeline.aindex_document(doc.content, str(doc.id), {"filename": doc.filename, "file_type": doc.file_type})
+
+            _msg2 = json.dumps({'type': 'status', 'message': 'Retrieving relevant chunks…'})
+            yield f"data: {_msg2}\n\n"
+            results = await pipeline.aretrieve(query, top_k=top_k)
+
+            if similarity_threshold > 0 and results and isinstance(results[0], tuple):
+                filtered = [(c, s) for c, s in results if s >= similarity_threshold]
+                # Safety: never filter out everything — fall back to unfiltered top results
+                results = filtered if filtered else results
+
+            chunks = [res[0] if isinstance(res, tuple) else res for res in results]
+            raw_scores = [float(res[1]) if isinstance(res, tuple) else float(getattr(res, "score", 0.0)) for res in results]
+            scores = _normalize_scores_for_display(raw_scores)
+
+            # 2. Send full chunk text + score
+            chunk_meta = [
+                {"text": getattr(c, "text", ""), "score": round(scores[idx], 4)}
+                for idx, c in enumerate(chunks)
+            ]
+            yield f"data: {json.dumps({'type': 'metadata', 'chunks': chunk_meta})}\n\n"
+
+            # 3. Stream generation tokens
+            full_response = ""
+            async for token in pipeline.agenerate_stream(query, chunks):
+                full_response += token
+                yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
+
+            # Record successful LLM call in a short-lived session.
+            async with AsyncSessionLocal() as limiter_db:
+                limiter = DatabaseRateLimiter(limiter_db)
+                await limiter.record_call(scope_key, "llm", current_user.id)
+
+            # Notify UI immediately that generation is complete.
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+            # 4. Persist to DB (non-blocking for UI because done is already sent)
+            try:
+                async with AsyncSessionLocal() as write_db:
+                    user_msg = ChatMessage(
+                        user_id=current_user.id,
+                        document_id=doc_id,
+                        config_id=config_id,
+                        role="user",
+                        content=query,
+                    )
+                    write_db.add(user_msg)
+                    assistant_msg = ChatMessage(
+                        user_id=current_user.id,
+                        document_id=doc_id,
+                        config_id=config_id,
+                        role="assistant",
+                        content=full_response,
+                        retrieved_chunks=[{"text": getattr(c, "text", ""), "score": scores[i]} for i, c in enumerate(chunks)]
+                    )
+                    write_db.add(assistant_msg)
+                    await write_db.commit()
+            except Exception:
+                pass
+
+        except asyncio.CancelledError:
+            # Client disconnected mid-stream.
+            raise
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 @router.get("/history/{doc_id}", response_model=list[ChatMessageResponse])
-def get_chat_history(doc_id: uuid.UUID, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def get_chat_history(doc_id: uuid.UUID, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     stmt = (
         select(ChatMessage)
         .where(ChatMessage.document_id == doc_id, ChatMessage.user_id == current_user.id)
         .order_by(ChatMessage.timestamp)
     )
-    return db.execute(stmt).scalars().all()
+    return (await db.execute(stmt)).scalars().all()
 
 @router.post("/reset")
-def reset_system(
+async def reset_system(
     doc_id: uuid.UUID = Body(...), 
     config_id: uuid.UUID = Body(...), 
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Resets memory, deletes history, and clears vectordb collections."""
     from sqlalchemy import delete
-    from app.services.pipeline_manager import PipelineManager
     import shutil
     import os
     
-    # 1. Clear in-memory pipeline cache
-    PipelineManager.clear_cache()
-    
     # 2. Clear Database conversation history for this document
-    db.execute(delete(ChatMessage).where(ChatMessage.document_id == doc_id, ChatMessage.user_id == current_user.id))
-    db.commit()
+    await db.execute(delete(ChatMessage).where(ChatMessage.document_id == doc_id, ChatMessage.user_id == current_user.id))
+    await db.commit()
     
     # 3. Clear Chroma storage folder if it exists (wipe everything)
     # WARNING: This deletes all collections. If specific config reset is desired, 
@@ -455,8 +458,7 @@ def reset_system(
             shutil.rmtree(persist_dir)
             os.makedirs(persist_dir, exist_ok=True)
         except Exception as e:
-            # Might be locked by process, but PipelineManager.clear_cache() 
-            # should release the Python references.
+            # Might be locked by process.
             return {"status": "partial_success", "error": f"Failed to clear disk storage: {str(e)}"}
             
     return {"status": "success", "message": "System reset complete."}

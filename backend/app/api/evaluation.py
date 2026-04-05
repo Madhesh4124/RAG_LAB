@@ -2,7 +2,7 @@ import uuid
 from copy import deepcopy
 
 from fastapi import APIRouter, Body, Depends, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.database import get_db
@@ -15,7 +15,7 @@ from app.services.chunking.base import Chunk
 from app.services.evaluation.answer_relevancy import AnswerRelevancyEvaluator
 from app.services.evaluation.context_quality import ContextQualityEvaluator
 from app.services.evaluation.faithfulness import FaithfulnessEvaluator
-from app.services.pipeline_manager import PipelineManager
+from app.services.pipeline_factory import PipelineFactory
 
 router = APIRouter(prefix="/api/evaluation", tags=["evaluation"])
 
@@ -41,7 +41,7 @@ def _chunks_from_payload(raw_chunks):
 
 
 def score_message(
-    db: Session,
+    db: AsyncSession,
     assistant_msg: ChatMessage,
     query_text: str,
     llm_client,
@@ -81,9 +81,9 @@ def score_message(
     return result
 
 
-def score_message_by_id(db: Session, message_id: uuid.UUID, user_id: uuid.UUID) -> EvaluationResult:
+async def score_message_by_id(db: AsyncSession, message_id: uuid.UUID, user_id: uuid.UUID) -> EvaluationResult:
     msg_stmt = select(ChatMessage).where(ChatMessage.id == message_id, ChatMessage.user_id == user_id)
-    msg = db.execute(msg_stmt).scalars().first()
+    msg = (await db.execute(msg_stmt)).scalars().first()
     if not msg:
         raise ValueError("Message not found")
     if msg.role != "assistant":
@@ -100,11 +100,11 @@ def score_message_by_id(db: Session, message_id: uuid.UUID, user_id: uuid.UUID) 
         )
         .order_by(ChatMessage.timestamp.desc())
     )
-    user_msg = db.execute(query_stmt).scalars().first()
+    user_msg = (await db.execute(query_stmt)).scalars().first()
     if not user_msg:
         raise ValueError("Associated user query was not found")
 
-    config = db.get(RAGConfig, msg.config_id)
+    config = await db.get(RAGConfig, msg.config_id)
     if not config:
         raise ValueError("RAG config not found")
 
@@ -114,7 +114,7 @@ def score_message_by_id(db: Session, message_id: uuid.UUID, user_id: uuid.UUID) 
         vectorstore_cfg["collection_name"] = f"user_{user_id}_rag_cfg_{config.id}"
         pipeline_config["vectorstore"] = vectorstore_cfg
 
-    pipeline = PipelineManager.get_pipeline(f"{user_id}:{config.id}", pipeline_config)
+    pipeline = PipelineFactory.create_pipeline(pipeline_config)
     llm_client = getattr(pipeline, "llm_client", None)
     chunks = _chunks_from_payload(msg.retrieved_chunks or [])
     result = score_message(
@@ -128,13 +128,13 @@ def score_message_by_id(db: Session, message_id: uuid.UUID, user_id: uuid.UUID) 
 
 
 @router.post("/score")
-def evaluate_score(
+async def evaluate_score(
     message_id: uuid.UUID = Body(..., embed=True),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     try:
-        result = score_message_by_id(db=db, message_id=message_id, user_id=current_user.id)
+        result = await score_message_by_id(db=db, message_id=message_id, user_id=current_user.id)
     except ValueError as exc:
         text = str(exc)
         if "not found" in text.lower():
@@ -145,8 +145,8 @@ def evaluate_score(
             raise HTTPException(status_code=503, detail=text)
         raise HTTPException(status_code=500, detail=text)
 
-    db.commit()
-    db.refresh(result)
+    await db.commit()
+    await db.refresh(result)
 
     return {
         "message_id": str(result.message_id),
@@ -159,8 +159,8 @@ def evaluate_score(
 
 
 @router.post("/faithfulness")
-def evaluate_faithfulness_alias(
+async def evaluate_faithfulness_alias(
     message_id: uuid.UUID = Body(..., embed=True),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
-    return evaluate_score(message_id=message_id, db=db)
+    return await evaluate_score(message_id=message_id, db=db)

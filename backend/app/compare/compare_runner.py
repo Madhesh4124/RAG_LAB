@@ -1,5 +1,6 @@
 import asyncio
 import os
+import threading
 import time
 from typing import List, Tuple
 
@@ -8,6 +9,27 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from app.compare.schemas import ConfigResult, RAGConfig
 from app.compare.collection_registry import get_or_load_collection
 from app.compare.utils import calc_avg_similarity, filter_by_threshold
+
+
+_LLM_CACHE: dict[tuple[str, str], ChatGoogleGenerativeAI] = {}
+_LLM_CACHE_LOCK = threading.Lock()
+
+
+def _get_cached_compare_llm(model: str, api_key: str) -> ChatGoogleGenerativeAI:
+    cache_key = (model, api_key)
+    with _LLM_CACHE_LOCK:
+        cached = _LLM_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    llm = ChatGoogleGenerativeAI(
+        model=model,
+        temperature=0,
+        google_api_key=api_key,
+    )
+    with _LLM_CACHE_LOCK:
+        _LLM_CACHE.setdefault(cache_key, llm)
+        return _LLM_CACHE[cache_key]
 
 
 def _to_similarity(score: float) -> float:
@@ -72,11 +94,7 @@ async def run_single_config(
     if not api_key:
         raise ValueError("GEMINI_API_KEY/GOOGLE_API_KEY is not set.")
 
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
-        temperature=0,
-        google_api_key=api_key,
-    )
+    llm = _get_cached_compare_llm(model="gemini-2.5-flash", api_key=api_key)
 
     try:
         llm_response = await asyncio.to_thread(llm.invoke, prompt)

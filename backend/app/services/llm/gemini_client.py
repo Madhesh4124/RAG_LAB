@@ -1,5 +1,6 @@
 """Gemini LLM Client."""
 
+import asyncio
 import os
 from functools import lru_cache
 from typing import Any, Dict, List
@@ -103,6 +104,12 @@ class GeminiClient:
             return "No context provided."
         return "\n\n".join([f"[{i+1}] {c.text}" for i, c in enumerate(chunks)])
 
+    def _build_prompt(self, query: str, chunks: List[Chunk], memory: Any = None) -> str:
+        context = _build_context(chunks)
+        if memory is not None and hasattr(memory, "get") and memory.get():
+            return self._build_memory_prompt(query, chunks, memory)
+        return f"{self.system_prompt}\n\nDocument Context:\n{context}\n\nQuestion: {query}\n\nAnswer:"
+
     def generate(self, query: str, chunks: List[Chunk]) -> str:
         """Generate response based on query and context chunks."""
         if not self.llm:
@@ -110,10 +117,27 @@ class GeminiClient:
                 "LLM client not initialized. GEMINI_API_KEY/GOOGLE_API_KEY is missing."
             )
             
-        context = _build_context(chunks)
-        prompt = f"{self.system_prompt}\n\nDocument Context:\n{context}\n\nQuestion: {query}\n\nAnswer:"
+        prompt = self._build_prompt(query, chunks)
         
         response = self.llm.invoke(prompt)
+        text = _content_to_text(getattr(response, "content", "")).strip()
+        if text:
+            return text
+        return "I could not generate a grounded answer from the provided context."
+
+    async def generate_async(self, query: str, chunks: List[Chunk], memory: Any = None) -> str:
+        """Async generation using LangChain's async model interface when available."""
+        if not self.llm:
+            raise RuntimeError(
+                "LLM client not initialized. GEMINI_API_KEY/GOOGLE_API_KEY is missing."
+            )
+
+        prompt = self._build_prompt(query, chunks, memory=memory)
+        if hasattr(self.llm, "ainvoke"):
+            response = await self.llm.ainvoke(prompt)
+        else:
+            response = await asyncio.to_thread(self.llm.invoke, prompt)
+
         text = _content_to_text(getattr(response, "content", "")).strip()
         if text:
             return text
@@ -133,6 +157,30 @@ class GeminiClient:
             if text:
                 emitted = True
                 yield text
+        if not emitted:
+            yield "I could not generate a grounded answer from the provided context."
+
+    async def generate_stream_async(self, query: str, chunks: List[Chunk], memory: Any = None):
+        """Async stream response based on query and context chunks."""
+        if not self.llm:
+            raise RuntimeError("LLM client not initialized.")
+
+        prompt = self._build_prompt(query, chunks, memory=memory)
+        emitted = False
+
+        if hasattr(self.llm, "astream"):
+            async for chunk in self.llm.astream(prompt):
+                text = _content_to_text(getattr(chunk, "content", ""))
+                if text:
+                    emitted = True
+                    yield text
+        else:
+            for piece in self.llm.stream(prompt):
+                text = _content_to_text(getattr(piece, "content", ""))
+                if text:
+                    emitted = True
+                    yield text
+
         if not emitted:
             yield "I could not generate a grounded answer from the provided context."
 

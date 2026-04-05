@@ -60,13 +60,14 @@ def test_require_admin_rejects_non_admin(monkeypatch):
     assert exc.value.status_code == 403
 
 
-def test_list_chroma_roots_returns_collection_details(monkeypatch, tmp_path):
+@pytest.mark.anyio
+async def test_list_chroma_roots_returns_collection_details(monkeypatch, tmp_path):
     monkeypatch.setenv("AUTH_SEED_USERNAME", "admin")
     monkeypatch.setenv("AUTH_SEED_EMAIL", "admin@local")
     monkeypatch.setattr("app.api.admin.PersistentClient", _FakeClient)
     monkeypatch.setattr("app.api.admin._storage_roots", lambda: [tmp_path])
 
-    response = list_chroma_roots(current_user=_make_user(username="admin", email="admin@local"))
+    response = await list_chroma_roots(current_user=_make_user(username="admin", email="admin@local"))
 
     assert len(response) == 1
     assert response[0].root_path == str(tmp_path)

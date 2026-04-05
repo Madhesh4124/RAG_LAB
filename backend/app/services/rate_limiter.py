@@ -1,61 +1,75 @@
-"""Rate limiting middleware and utilities for API calls."""
+"""Database-backed rate limiting utilities for API calls."""
 
 import os
-import time
-import logging
-from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Tuple
+from typing import Tuple
 from uuid import UUID
 
-logger = logging.getLogger(__name__)
+from fastapi import Depends
+from sqlalchemy import delete, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.database import get_db
+from app.models.rate_limit import RateLimitEvent
 
 
-class APIRateLimiter:
+class DatabaseRateLimiter:
+    """Track and enforce rate limits using shared database state.
+
+    This is safe across multiple workers because counters are derived from
+    persisted rows instead of process memory.
     """
-    Track and enforce rate limits per user.
-    
-    - LLM calls: max 5 per hour
-    - Default: cooldown per call type to prevent burst
-    """
 
-    def __init__(self):
+    def __init__(self, db: AsyncSession):
+        self.db = db
         self.max_llm_calls_per_hour = int(os.getenv("MAX_LLM_CALLS_PER_HOUR", "15"))
         self.max_embedding_calls_per_hour = int(os.getenv("MAX_EMBEDDING_CALLS_PER_HOUR", "50"))
         self.max_retrieval_calls_per_hour = int(os.getenv("MAX_RETRIEVAL_CALLS_PER_HOUR", "100"))
-        
-        # In-memory store: {user_id: {call_type: [(timestamp, ...], ...}}}
-        self._call_history: Dict[str, Dict[str, list]] = defaultdict(lambda: defaultdict(list))
 
-    def check_rate_limit(self, user_id: UUID, call_type: str = "llm") -> Tuple[bool, int, str]:
-        """
-        Check if user has exceeded rate limit for the call type.
-        
-        Returns:
-            (allowed: bool, remaining: int, error_message: str)
-        """
-        user_key = str(user_id)
-        now = datetime.now(timezone.utc)
-        one_hour_ago = now - timedelta(hours=1)
+    @staticmethod
+    def build_scope_key(user_id: UUID | None = None, ip_address: str | None = None) -> str:
+        if user_id is not None:
+            return f"user:{user_id}"
+        if ip_address:
+            return f"ip:{ip_address}"
+        return "anonymous"
 
-        # Clean old calls outside 1-hour window
-        if user_key in self._call_history:
-            for ctype in self._call_history[user_key]:
-                self._call_history[user_key][ctype] = [
-                    ts for ts in self._call_history[user_key][ctype]
-                    if ts > one_hour_ago
-                ]
-
-        # Get limit for call type
+    def _limit_for(self, call_type: str) -> int:
         limits = {
             "llm": self.max_llm_calls_per_hour,
             "embedding": self.max_embedding_calls_per_hour,
             "retrieval": self.max_retrieval_calls_per_hour,
         }
-        limit = limits.get(call_type, limits["llm"])
+        return limits.get(call_type, limits["llm"])
 
-        # Count calls in past hour
-        call_count = len(self._call_history[user_key][call_type])
+    async def _prune_old_events(self, scope_key: str, call_type: str) -> None:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
+        await self.db.execute(
+            delete(RateLimitEvent).where(
+                RateLimitEvent.scope_key == scope_key,
+                RateLimitEvent.call_type == call_type,
+                RateLimitEvent.created_at < cutoff,
+            )
+        )
+        await self.db.commit()
+
+    async def check_rate_limit(self, scope_key: str, call_type: str = "llm") -> Tuple[bool, int, str]:
+        """Return whether the request is allowed and how many calls remain."""
+        await self._prune_old_events(scope_key, call_type)
+
+        limit = self._limit_for(call_type)
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
+
+        result = await self.db.execute(
+            select(func.count())
+            .select_from(RateLimitEvent)
+            .where(
+                RateLimitEvent.scope_key == scope_key,
+                RateLimitEvent.call_type == call_type,
+                RateLimitEvent.created_at >= cutoff,
+            )
+        )
+        call_count = int(result.scalar_one())
         remaining = max(0, limit - call_count)
 
         if call_count >= limit:
@@ -63,26 +77,28 @@ class APIRateLimiter:
 
         return True, remaining, ""
 
-    def record_call(self, user_id: UUID, call_type: str = "llm") -> None:
-        """Record a successful API call."""
-        user_key = str(user_id)
-        now = datetime.now(timezone.utc)
-        self._call_history[user_key][call_type].append(now)
+    async def record_call(self, scope_key: str, call_type: str = "llm", user_id: UUID | None = None) -> None:
+        """Record a successful API call in persistent storage."""
+        self.db.add(
+            RateLimitEvent(
+                user_id=user_id,
+                scope_key=scope_key,
+                call_type=call_type,
+            )
+        )
+        await self.db.commit()
 
-    def record_rate_limit_error(self, user_id: UUID, call_type: str = "llm", error_message: str = "") -> dict:
-        """Record a rate limit error event for monitoring."""
+    @staticmethod
+    def record_rate_limit_error(scope_key: str, call_type: str = "llm", error_message: str = "") -> dict:
+        """Return a structured error event for monitoring and logging."""
         return {
-            "user_id": str(user_id),
+            "scope_key": scope_key,
             "call_type": call_type,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "error": error_message,
         }
 
 
-# Global rate limiter instance
-_rate_limiter = APIRateLimiter()
-
-
-def get_rate_limiter() -> APIRateLimiter:
-    """Get the global rate limiter instance."""
-    return _rate_limiter
+async def get_rate_limiter(db: AsyncSession = Depends(get_db)) -> DatabaseRateLimiter:
+    """Dependency that creates a request-scoped rate limiter."""
+    return DatabaseRateLimiter(db)

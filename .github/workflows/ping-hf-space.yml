@@ -1,0 +1,24 @@
+name: Ping HF Space
+
+on:
+  schedule:
+    - cron: "0 */12 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping HF Space health endpoint
+        env:
+          HF_SPACE_URL: ${{ vars.HF_SPACE_URL }}
+        run: |
+          set -euo pipefail
+          url="${HF_SPACE_URL:-https://madhesh4124-rag-backend.hf.space}"
+          echo "Pinging ${url}/health"
+          curl --fail --show-error --silent --location \
+            --retry 3 --retry-delay 5 --max-time 30 \
+            "${url}/health"

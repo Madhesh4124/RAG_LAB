@@ -12,13 +12,41 @@ jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping HF Space health endpoint
+      - name: Ping HF Space
         env:
           HF_SPACE_URL: ${{ vars.HF_SPACE_URL }}
+          HF_SPACE_PING_PATH: ${{ vars.HF_SPACE_PING_PATH }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           set -euo pipefail
           url="${HF_SPACE_URL:-https://madhesh4124-rag-backend.hf.space}"
-          echo "Pinging ${url}/health"
-          curl --fail --show-error --silent --location \
+          path="${HF_SPACE_PING_PATH:-/}"
+          full_url="${url%/}${path}"
+
+          auth_args=()
+          if [[ -n "${HF_TOKEN:-}" ]]; then
+            auth_args=(-H "Authorization: Bearer ${HF_TOKEN}")
+            echo "Pinging ${full_url} with token auth"
+          else
+            echo "Pinging ${full_url} without token auth"
+          fi
+
+          code=$(curl --show-error --silent --location \
             --retry 3 --retry-delay 5 --max-time 30 \
-            "${url}/health"
+            "${auth_args[@]}" \
+            --output /dev/null --write-out "%{http_code}" \
+            "${full_url}")
+
+          echo "Response code: ${code}"
+
+          if [[ "${code}" =~ ^[23] ]]; then
+            exit 0
+          fi
+
+          if [[ -z "${HF_TOKEN:-}" && ( "${code}" == "401" || "${code}" == "403" || "${code}" == "404" ) ]]; then
+            echo "Space likely private or gated from unauthenticated requests; treating as successful ping."
+            exit 0
+          fi
+
+          echo "Ping failed with HTTP ${code}"
+          exit 1

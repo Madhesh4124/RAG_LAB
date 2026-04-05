@@ -19,14 +19,19 @@ PASSWORD_RESET_TOKEN_EXPIRY_MINUTES = 30
 def _get_serializer() -> URLSafeTimedSerializer:
     secret = os.getenv("AUTH_SECRET_KEY")
     if not secret:
-        raise RuntimeError("AUTH_SECRET_KEY environment variable is not set")
+        # Generate a default secret if not provided (not secure for production, but safe for HF Spaces dev)
+        import hashlib
+        secret = hashlib.sha256(b"raglab-default-secret").hexdigest()
+        print("[WARNING] AUTH_SECRET_KEY not set. Using default. Set AUTH_SECRET_KEY in environment for production.")
     return URLSafeTimedSerializer(secret_key=secret, salt="raglab-auth")
 
 
 def _get_reset_serializer() -> URLSafeTimedSerializer:
     secret = os.getenv("AUTH_SECRET_KEY")
     if not secret:
-        raise RuntimeError("AUTH_SECRET_KEY environment variable is not set")
+        # Generate a default secret if not provided (not secure for production, but safe for HF Spaces dev)
+        import hashlib
+        secret = hashlib.sha256(b"raglab-default-secret").hexdigest()
     return URLSafeTimedSerializer(secret_key=secret, salt="raglab-password-reset")
 
 

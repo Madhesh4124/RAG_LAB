@@ -54,6 +54,19 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="RAG Lab API", lifespan=lifespan)
 
 
+def _cors_origins() -> list[str]:
+    origins = {
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
+    }
+    frontend_url = os.getenv("FRONTEND_URL")
+    if frontend_url:
+        origins.add(frontend_url.rstrip("/"))
+    return sorted(origins)
+
+
 # Add global exception handler for 429 rate limit errors
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
@@ -121,14 +134,8 @@ async def global_exception_handler(request: Request, exc: Exception):
 # Configure CORS Middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",      # Local dev (Vite default)
-        "http://localhost:5174",      # Local dev alt
-        "http://127.0.0.1:5173",      # Local dev alt
-        "http://127.0.0.1:5174",      # Local dev alt
-        "https://*.vercel.app",       # Vercel frontend deployment
-        "https://*.hf.space",         # HF Spaces frontend (if deployed there)
-    ],
+    allow_origins=_cors_origins(),
+    allow_origin_regex=r"https://([a-zA-Z0-9-]+\.)*(vercel\.app|hf\.space)",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -16,9 +16,6 @@ SESSION_COOKIE_NAME = "raglab_session"
 SESSION_MAX_AGE_SECONDS = int(timedelta(days=7).total_seconds())
 PASSWORD_RESET_TOKEN_EXPIRY_MINUTES = 30
 
-# Determine if running in production (HF Spaces, Vercel, etc.) vs local dev
-IS_PRODUCTION = not os.getenv("DEBUG", "false").lower() == "true" and "localhost" not in os.getenv("FRONTEND_URL", "")
-
 
 def _get_serializer() -> URLSafeTimedSerializer:
     secret = os.getenv("AUTH_SECRET_KEY")
@@ -79,22 +76,48 @@ def decode_password_reset_token(token: str) -> uuid.UUID:
         raise BadSignature("Invalid or expired reset token") from exc
 
 
+def _cookie_settings() -> tuple[bool, str]:
+    """Return secure/samesite values compatible with local and deployed frontends."""
+    cookie_secure = os.getenv("COOKIE_SECURE")
+    cookie_samesite = os.getenv("COOKIE_SAMESITE")
+
+    if cookie_secure is None:
+        # Default to secure cookies in deployments (HF Spaces / Vercel).
+        cookie_secure_bool = True
+    else:
+        cookie_secure_bool = cookie_secure.lower() != "false"
+
+    if cookie_samesite is None:
+        # Cross-site frontend->backend calls require SameSite=None.
+        cookie_samesite_value = "none" if cookie_secure_bool else "lax"
+    else:
+        cookie_samesite_value = cookie_samesite.lower()
+
+    return cookie_secure_bool, cookie_samesite_value
+
+
 def set_auth_cookie(response: Response, token: str) -> None:
-    # Use secure=True for HTTPS (production), False for HTTP (localhost dev)
-    # Override with COOKIE_SECURE env var for testing
-    use_secure = os.getenv("COOKIE_SECURE", "true").lower() != "false"
+    use_secure, same_site = _cookie_settings()
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=token,
         max_age=SESSION_MAX_AGE_SECONDS,
         httponly=True,
-        secure=use_secure,  # True for HTTPS (HF Spaces, Vercel), False for HTTP (localhost)
-        samesite="lax",
+        secure=use_secure,
+        samesite=same_site,
+        path="/",
     )
 
 
 def clear_auth_cookie(response: Response) -> None:
-    response.delete_cookie(key=SESSION_COOKIE_NAME, httponly=True, samesite="lax")
+    use_secure, same_site = _cookie_settings()
+    response.delete_cookie(
+        key=SESSION_COOKIE_NAME,
+        httponly=True,
+        secure=use_secure,
+        samesite=same_site,
+        path="/",
+    )
 
 
 def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:

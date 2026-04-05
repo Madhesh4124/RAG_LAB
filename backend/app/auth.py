@@ -1,6 +1,7 @@
 import os
 import uuid
 from datetime import timedelta, datetime, timezone
+import hashlib
 
 import bcrypt
 from fastapi import Depends, HTTPException, Request, Response, status
@@ -14,6 +15,9 @@ from app.models.user import User, PasswordResetToken
 SESSION_COOKIE_NAME = "raglab_session"
 SESSION_MAX_AGE_SECONDS = int(timedelta(days=7).total_seconds())
 PASSWORD_RESET_TOKEN_EXPIRY_MINUTES = 30
+
+# Determine if running in production (HF Spaces, Vercel, etc.) vs local dev
+IS_PRODUCTION = not os.getenv("DEBUG", "false").lower() == "true" and "localhost" not in os.getenv("FRONTEND_URL", "")
 
 
 def _get_serializer() -> URLSafeTimedSerializer:
@@ -76,12 +80,15 @@ def decode_password_reset_token(token: str) -> uuid.UUID:
 
 
 def set_auth_cookie(response: Response, token: str) -> None:
+    # Use secure=True for HTTPS (production), False for HTTP (localhost dev)
+    # Override with COOKIE_SECURE env var for testing
+    use_secure = os.getenv("COOKIE_SECURE", "true").lower() != "false"
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=token,
         max_age=SESSION_MAX_AGE_SECONDS,
         httponly=True,
-        secure=False,
+        secure=use_secure,  # True for HTTPS (HF Spaces, Vercel), False for HTTP (localhost)
         samesite="lax",
     )
 

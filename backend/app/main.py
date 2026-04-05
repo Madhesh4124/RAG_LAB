@@ -118,10 +118,17 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
-# Configure CORS Middleware allowing local frontend testing smoothly
+# Configure CORS Middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:5174", "http://127.0.0.1:5173", "http://127.0.0.1:5174"],
+    allow_origins=[
+        "http://localhost:5173",      # Local dev (Vite default)
+        "http://localhost:5174",      # Local dev alt
+        "http://127.0.0.1:5173",      # Local dev alt
+        "http://127.0.0.1:5174",      # Local dev alt
+        "https://*.vercel.app",       # Vercel frontend deployment
+        "https://*.hf.space",         # HF Spaces frontend (if deployed there)
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -100,6 +100,18 @@ export default function Login() {
             required
           />
 
+          {mode === "login" && (
+            <div className="text-right">
+              <button
+                type="button"
+                onClick={() => navigate('/password-reset')}
+                className="text-xs text-blue-600 hover:underline"
+              >
+                Forgot password?
+              </button>
+            </div>
+          )}
+
           {error && <p className="text-sm text-red-600">{error}</p>}
 
           <button

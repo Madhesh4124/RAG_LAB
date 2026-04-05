@@ -1,385 +1,238 @@
-# 🔬 RAG Lab – Retrieval-Augmented Generation Experimentation Platform
+# RAG Lab
 
-> A comprehensive experimentation platform for optimizing and tuning Retrieval-Augmented Generation (RAG) pipelines. Compare chunking strategies, embeddings, retrievers, and LLM configurations all in one place.
+RAG Lab is a full-stack playground for building, tuning, and comparing Retrieval-Augmented Generation (RAG) pipelines on your own documents.
 
----
+It includes:
+- A FastAPI backend for document processing, indexing, chat, evaluation, and metrics.
+- A React + Vite frontend with a guided setup wizard, chunk preview, compare mode, and chat UI.
 
-## 🎯 Problem & Solution
+## What Is Implemented Today
 
-### The Problem
-Building production-grade RAG systems is complex and unintuitive. Teams face critical challenges:
-- **Too many variables**: How do you choose between semantic chunking vs. fixed-size chunking? Which embedding model performs best? Sparse vs. dense vs. hybrid retrieval?
-- **No experimentation tools**: Testing different configurations requires manual coding, making A/B comparisons time-consuming and error-prone
-- **Black-box pipelines**: Limited visibility into retrieval quality, chunk relevance, and performance bottlenecks
-- **Config management**: Saving, comparing, and exporting configurations is ad-hoc
+### Core workflow
+1. Upload a document (`.pdf` or `.txt`).
+2. Configure a pipeline in a step-by-step wizard.
+3. Save config and preview generated chunks.
+4. Chat with streaming responses.
+5. Compare multiple retrieval/indexing configs side-by-side.
+6. Score/evaluate responses and inspect performance metrics.
 
-### The Solution
-**RAG Lab** is an interactive experimentation platform that:
-✅ Allows you to configure and test RAG pipelines visually  
-✅ Compares multiple configurations side-by-side on the same query  
-✅ Provides real-time chunk previews and performance metrics  
-✅ Supports multiple chunking strategies, embedders, retrievers, and LLMs  
-✅ Exports/imports configurations for reproducibility  
-✅ Helps you find the optimal RAG setup for your documents  
+### Setup wizard
+- 5-step flow: Upload, Chunking, Embedding, Retrieval, LLM & Memory.
+- Presets: `fast`, `balanced`, `accurate`, `recursive`, `chapter`, `sentence_window`.
+- Chunking strategies in UI:
+  - `fixed_size`
+  - `recursive`
+  - `semantic`
+  - `chapter_based`
+  - `regex`
+  - `sentence_window`
+- Embedding providers in UI:
+  - NVIDIA
+  - Hugging Face
+- Retrieval modes:
+  - `dense`
+  - `sparse`
+  - `hybrid`
+  - `mmr`
+- Reranker toggle and model selection (Hugging Face API reranker).
+- LLM selection is fixed to Gemma in UI (`gemma-4-26b-a4b-it`).
+- Memory modes:
+  - `none`
+  - `buffer`
+  - `summary`
 
----
+### Chunk preview
+- Visualizes chunks for a selected document + saved config.
+- Shows chunk order, ranges, and overlap metadata.
 
-## 🚀 Key Features
+### Chat
+- Streaming chat endpoint (`/api/chat/stream`) with status, metadata, token stream, done events.
+- Stores user/assistant messages.
+- Stores timing/quality metrics per assistant message.
+- Auto-evaluation hook for faithfulness/relevancy/context metrics (best-effort).
+- System reset endpoint to clear cache/history/vector storage.
 
-### 1. **Document Upload & Processing**
-- Upload PDF, TXT, DOCX, and other document formats
-- Automatic text extraction and preprocessing
-- Support for large documents with efficient processing
+### Compare mode
+- Uses dedicated compare module endpoints (`/compare/index`, `/compare/run`, `/compare/clear-chromadb`).
+- Supports staging up to 4 configs.
+- Supports all compare chunking strategies and chunk hyperparameters.
+- Supports embedding provider/model selection in compare config modal (NVIDIA + Hugging Face model sets).
+- Per-config indexing status in cards and staging panel.
+- Staging panel shows a filling progress bar while a config is indexing.
 
-### 2. **Configurable RAG Pipeline**
-Customize every component of your RAG stack:
+### Evaluation and analytics
+- Message-level evaluation endpoint with:
+  - `faithfulness`
+  - `answer_relevancy`
+  - `context_precision`
+  - `context_recall`
+- Analysis endpoint includes:
+  - ranked chunks
+  - score distribution
+  - chunk diversity
+  - timing breakdown
+- Metrics summary endpoint returns:
+  - per-config aggregates
+  - per-query rows
 
-**Chunking Strategies:**
-- `semantic` – Chunks based on semantic similarity
-- `fixed_size` – Fixed token/character-length chunks with overlap
-- `chapter_based` – Splits on document structure (chapters, sections)
-- `recursive` – Hierarchical splitting for nested structure
-- `regex` – Custom regex-based splitting
+## Project Structure
 
-**Embedding Models:**
-- Google Embeddings
-- HuggingFace API Embeddings
-- NVIDIA Embeddings
-- Local HuggingFace embeddings
-
-**Retrieval Methods:**
-- `dense` – Vector similarity search (semantic)
-- `sparse` – BM25/TF-IDF keyword matching
-- `hybrid` – Combines dense + sparse for best of both worlds
-
-**LLM Providers:**
-- Google Gemini (with configurable model variants)
-- Extensible for additional providers
-
-**Memory Types:**
-- `buffer_memory` – Standard sliding window memory
-- `summary_memory` – Summarizes older messages to preserve context
-
-**Vector Store:**
-- ChromaDB – Lightweight, embedded vector database
-
-### 3. **Chunk Visualization & Preview**
-- See exactly how your document is chunked before running queries
-- Visualize chunk boundaries and metadata
-- Understand chunking strategy impact in real-time
-
-### 4. **Configuration Comparison**
-- Test the same query across multiple RAG configurations
-- Side-by-side comparison of:
-  - Retrieved chunks
-  - Similarity scores
-  - LLM responses
-  - Performance metrics (retrieval time, embedding time, etc.)
-- Identify which configuration works best for your use case
-
-### 5. **Performance Analytics**
-Track performance breakdown:
-- **Chunking Time** – How long document processing takes
-- **Embedding Time** – Vector generation latency
-- **Retrieval Time** – Database query performance
-- **LLM Time** – Model inference latency
-- **Total Time** – End-to-end pipeline latency
-
-### 6. **Configuration Management**
-- Save configurations to database
-- Export to JSON for sharing/backup
-- Import previously saved configurations
-- Default presets for quick setup
-
----
-
-## 🏗️ Architecture
-
-### Backend (FastAPI)
-```
-backend/
-├── app/
-│   ├── api/                    # REST API endpoints
-│   │   ├── documents.py        # Upload, retrieve, preview chunks
-│   │   ├── chat.py             # Query & RAG pipeline execution
-│   │   ├── config.py           # Configuration CRUD + import/export
-│   │   ├── compare.py          # Multi-config comparison
-│   │   └── analysis.py         # Metrics & performance analysis
-│   ├── services/               # Core RAG pipeline logic
-│   │   ├── rag_pipeline.py     # Main RAG orchestration
-│   │   ├── pipeline_factory.py # Create pipelines from config
-│   │   ├── chunking/           # Text chunking strategies
-│   │   ├── embedding/          # Embedding providers
-│   │   ├── retrieval/          # Retrieval implementations
-│   │   ├── vectorstore/        # Vector database adapters
-│   │   ├── llm/                # LLM client implementations
-│   │   └── memory/             # Context memory management
-│   ├── models/                 # SQLAlchemy database models
-│   ├── database.py             # SQLAlchemy setup
-│   └── main.py                 # FastAPI app initialization
-└── requirements.txt
+```text
+RAG_LAB/
+  backend/
+    app/
+      api/                # /api routes (documents, chat, config, analysis, evaluation, metrics, legacy compare)
+      compare/            # dedicated compare module routes/services (/compare/*)
+      services/           # chunking, embedding, retrieval, memory, llm, pipeline
+      models/             # SQLAlchemy models
+      utils/              # file processing, serialization, timing
+      main.py
+    requirements.txt
+  frontend/
+    src/
+      pages/              # Setup, Preview, Compare, Chat
+      components/         # config wizard, compare UI, chat UI, preview UI
+      hooks/
+      services/api.js
+    package.json
+  README.md
 ```
 
-### Frontend (Vite + React)
-```
-frontend/
-├── src/
-│   ├── pages/                  # Main application pages
-│   │   ├── Setup.jsx           # Document upload + config wizard
-│   │   ├── Preview.jsx         # Chunk visualization
-│   │   └── Compare.jsx         # Multi-config comparison
-│   ├── components/
-│   │   ├── config/             # Configuration wizard flow
-│   │   ├── upload/             # Document upload UI
-│   │   ├── preview/            # Chunk visualization
-│   │   └── comparison/         # Config comparison UI
-│   ├── hooks/                  # React custom hooks
-│   ├── services/               # API client
-│   └── main.jsx
-└── vite.config.js
-```
+## Backend API (Current)
 
-### Data Storage
-- **Database**: SQLite (default, upgradeable to PostgreSQL)
-- **Vector Store**: ChromaDB (embedded)
-- **Documents**: Stored in database
-- **Configurations**: JSON stored in database for versioning
+### Health
+- `GET /`
+- `GET /health`
 
----
+### Documents (`/api/documents`)
+- `POST /upload`
+- `GET /{doc_id}`
+- `GET /{doc_id}/chunks?config_id=...`
+- `DELETE /{doc_id}`
 
-## 🎨 UI/UX Features & Future Ideas
+### Config (`/api/config`)
+- `POST /`
+- `GET /list`
+- `GET /{config_id}`
+- `GET /{config_id}/export`
+- `POST /import`
 
-### Current Features
-1. **Setup Page**
-   - Drag-and-drop document upload
-   - Step-by-step configuration wizard
-   - Real-time validation and error handling
+### Chat (`/api/chat`)
+- `POST /`
+- `POST /stream`
+- `GET /history/{doc_id}`
+- `POST /reset`
 
-2. **Preview Page**
-   - Visual chunking visualization with boxes/cards
-   - Chunk metadata display (size, similarity, position)
-   - Search highlighting in chunks
-   - Query-to-chunk relevance scoring
+### Analysis / Evaluation / Metrics
+- `GET /api/analysis/{message_id}`
+- `POST /api/evaluation/score`
+- `POST /api/evaluation/faithfulness` (alias)
+- `GET /api/metrics/summary?document_id=...`
 
-3. **Compare Page**
-   - Multi-config selection
-   - Side-by-side result display
-   - Query input with live comparison
-   - Performance metrics comparison table
+### Compare module (`/compare`)
+- `POST /index`
+- `POST /run`
+- `POST /clear-chromadb`
 
-### 💡 Future UI Enhancements
+Note: a legacy compare route also exists at `/api/compare`, but the current Compare page uses `/compare/*`.
 
-#### Analytics Dashboard
-- **Pipeline Performance Graph** - Visualize latency breakdown (chunking, embedding, retrieval, LLM times)
-- **Chunk Distribution Chart** - Histogram of chunk sizes, word counts
-- **Retrieval Quality Heatmap** - Show how many top-k results had high similarity scores
-- **Configuration Performance Leaderboard** - Rank all saved configs by metrics
+## Data and Persistence
 
-#### Advanced Visualization
-- **Chunk Dependency Graph** - Show how chunks relate to each other (for chapter-based splitting)
-- **Embedding Space Visualization** - 2D/3D UMAP/TSNE projection of embedded chunks
-- **Query-Chunk Similarity Matrix** - Heatmap showing similarity scores for all retrieved chunks
-- **Retrieval Pipeline Flow Diagram** - Visual representation of how documents flow through the pipeline
+- Relational data: SQLite via SQLAlchemy models.
+- Vector storage: Chroma persisted under project directories (compare flow uses its own store).
+- Stored entities include documents, configs, chat messages, evaluations, and metrics.
 
-#### Experimentation Features
-- **A/B Testing Mode** - Run same queries 100x and compare statistical significance
-- **Parameter Search Assistant** - Suggest optimal chunk_size, top_k, etc. based on initial runs
-- **Batch Query Testing** - Upload multiple queries and compare all configs at once
-- **Dataset Management** - Save multiple documents and run cross-document tests
+## Environment Variables
 
-#### UX Improvements
-- **Configuration Templates** - Pre-built templates for common use cases (legal docs, technical papers, news articles)
-- **Dark Mode** - Reduce eye strain for extended experimentation sessions
-- **Real-time Streaming Responses** - Chat responses stream to UI in real-time
-- **Search History** - Recent queries with result bookmarking
-- **Query Suggestions** - AI-powered query suggestions based on document content
+Set only what you need for selected providers/features.
 
-#### Export & Sharing
-- **PDF Report Generation** - Generate shareable comparison reports with charts
-- **Configuration Share Links** - Share configs via short URLs
-- **Result Snapshots** - Pin important query results for team discussion
-- **Markdown Export** - Export results as markdown for including in documentation
+### Common
+- `CHROMA_PERSIST_DIR` (optional)
 
-#### Admin/Team Features
-- **User Authentication** - Multi-user support with individual workspaces
-- **Shared Document Library** - Team document repository
-- **Configuration Library** - Curated list of best-performing configs
-- **Audit Logs** - Track who ran which experiments and when
-- **Team Collaboration** - Real-time collaborative testing sessions
+### LLM
+- `GOOGLE_API_KEY` or `GEMINI_API_KEY` (Gemma via Google GenAI)
 
-#### Advanced RAG Tuning
-- **Cost Estimator** - Show API costs for queries on different models/configs
-- **Token Counter** - Preview token usage before executing queries
-- **Latency Predictor** - Estimate query latency based on doc size and config
-- **Optimal k-finder** - Algorithm to determine best top_k value automatically
+### Embeddings
+- `NVIDIA_API_KEY` (NVIDIA embeddings)
+- `HUGGINGFACE_API_KEY` (Hugging Face Inference API fallback/client)
+- `GOOGLE_API_KEY` (if Google embedding provider is used in backend configs)
 
----
+### Analysis (optional)
+- `ANALYSIS_CONFIDENCE_THRESHOLD` (default `0.5`)
 
-## 🛠️ Tech Stack
+## Local Development
 
-### Backend
-- **FastAPI** – High-performance async web framework
-- **SQLAlchemy** – ORM for database management
-- **ChromaDB** – Vector database
-- **LangChain** – RAG pipeline orchestration patterns
-- **Google GenAI** – Gemini LLM integration
-- **HuggingFace Transformers** – Embedding models
-
-### Frontend
-- **React 18** – UI framework
-- **Vite** – Lightning-fast bundler
-- **Tailwind CSS** – Utility-first styling
-- **React Router** – Client-side routing
-- **Axios** – HTTP client
-
-### DevOps
-- **Docker** – Containerization
-- **SQLite** – Default database (PostgreSQL ready)
-
----
-
-## 🚀 Quick Start
-
-### Prerequisites
+## Prerequisites
 - Python 3.10+
 - Node.js 18+
-- Git
+- npm
 
-### Backend Setup
+### 1) Backend
+
 ```bash
 cd backend
 python -m venv .venv
-source .venv/Scripts/activate  # Windows
-# or: source .venv/bin/activate  # Linux/Mac
-
+source .venv/Scripts/activate   # Windows Git Bash
+# or .venv\Scripts\activate     # Windows PowerShell/CMD
 pip install -r requirements.txt
-
-# Set up environment variables
-export GOOGLE_API_KEY="your-key-here"
-# or for HuggingFace:
-export HUGGINGFACE_API_KEY="your-key-here"
-
-# Run the server
 uvicorn app.main:app --reload
 ```
 
-### Frontend Setup
+Backend default URL: `http://localhost:8000`
+
+### 2) Frontend
+
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
 
-Visit `http://localhost:5173` – the frontend will connect to the backend at `http://localhost:8000`
+Frontend default URL: `http://localhost:5173`
 
----
+If needed, set `VITE_API_URL` in the frontend environment to point to your backend.
 
-## 💾 Database Schema
+## API Rate Limiting
 
-### Core Models
-- **Document** – Stores uploaded documents
-- **RAGConfig** – Saves pipeline configurations
-- **ChatMessage** – Conversation history
-- **Metrics** – Performance metrics for each query
-- **Chunk** – Indexed chunks for retrieval
+RAG Lab implements per-user rate limiting to prevent API quota exhaustion:
 
----
+### Limits (1-hour rolling window)
 
-## 📊 Example Workflow
+| Feature | Limit | Configurable Via |
+|---------|-------|-----------------|
+| LLM Calls | 15 per hour | `MAX_LLM_CALLS_PER_HOUR` |
+| Embedding Calls | 50 per hour | `MAX_EMBEDDING_CALLS_PER_HOUR` |
+| Retrieval Calls | 100 per hour | `MAX_RETRIEVAL_CALLS_PER_HOUR` |
 
-1. **Upload Document** → `Setup` page: Upload your PDF/document
-2. **Configure Pipeline** → Select chunking, embedder, retriever, LLM
-3. **Preview Chunks** → `Preview` page: Visualize how document is split
-4. **Save Configuration** → Store config for future experiments
-5. **Compare Configs** → Run same query on multiple configs to find best one
-6. **Analyze Results** → Check performance metrics and chunk relevance
-7. **Export Config** → Save winning configuration for production
+- **LLM Calls**: Each chat query counts as 1 call (~1 call every 4 minutes at default limit)
+- **Embedding Calls**: Document indexing and embedding operations
+- **Retrieval Calls**: Vector store search operations
 
----
+When rate limit is exceeded, users receive a `429 Too Many Requests` error and must wait for the 1-hour window to reset.
 
-## 🔧 Configuration Example
+## Notes and Practical Tips
 
-```json
-{
-  "name": "Semantic + Gemini",
-  "chunker": {
-    "type": "semantic",
-    "max_chunk_size": 512,
-    "overlap": 100
-  },
-  "embedder": {
-    "type": "google_embeddings",
-    "model": "models/embedding-001"
-  },
-  "retriever": {
-    "type": "dense",
-    "top_k": 5,
-    "similarity_threshold": 0.7
-  },
-  "llm": {
-    "type": "gemini",
-    "model": "gemini-pro"
-  },
-  "memory": {
-    "type": "buffer_memory",
-    "max_tokens": 2000
-  }
-}
-```
+- First run for new Hugging Face models can be slow due to model resolution and warm-up logs.
+- `307` redirects and some `404` checks in model hub logs are usually normal during model discovery.
+- Compare indexing is config-specific; run `Run & Save Configs` before querying compare results.
+- For large documents and semantic chunking, indexing time can be noticeably higher than fixed-size chunking.
 
----
+## Tech Stack
 
-## 🐛 Known Limitations & Roadmap
+### Backend
+- FastAPI
+- SQLAlchemy
+- Chroma
+- LangChain ecosystem components
+- Google GenAI integration
 
-### Current Limitations
-- Chat interface UI not yet implemented (backend ready)
-- Single-threaded query processing
-- Limited to single-user per instance
+### Frontend
+- React
+- Vite
+- Tailwind CSS
+- React Router
+- Axios
 
-### Roadmap
-- [ ] Multi-user support with authentication
-- [ ] Streaming chat responses
-- [ ] Additional LLM providers (OpenAI, Anthropic, Ollama)
-- [ ] Advanced retrieval methods (ColBERT, DistilBERT)
-- [ ] Web crawler for dynamic content
-- [ ] Real-time collaboration
-- [ ] Mobile app
+## License
 
----
-
-## 📝 Contributing
-
-Contributions welcome! Please:
-1. Create a feature branch (`git checkout -b feature/your-feature`)
-2. Make your changes with clear commits
-3. Open a PR with a description of changes
-
----
-
-## 📚 Resources
-
-- [FastAPI Documentation](https://fastapi.tiangolo.com/)
-- [ChromaDB Guide](https://docs.trychroma.com/)
-- [React Documentation](https://react.dev/)
-- [Retrieval-Augmented Generation (RAG) Papers](https://arxiv.org/search/?query=rag&searchtype=all)
-
----
-
-## 📄 License
-
-MIT License – Feel free to use and modify!
-
----
-
-## 🎓 About RAG
-
-**Retrieval-Augmented Generation (RAG)** combines the power of large language models with retrieval systems:
-1. **Retrieve** relevant documents/chunks from a knowledge base
-2. **Augment** the prompt with retrieved context
-3. **Generate** accurate responses using the LLM
-
-This approach reduces hallucinations and grounds LLM responses in factual data.
-
----
-
-**Built with ❤️ for AI/ML engineers.**
+MIT

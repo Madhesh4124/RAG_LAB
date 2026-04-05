@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime, timezone
 
 from pydantic import BaseModel, ConfigDict, EmailStr
-from sqlalchemy import Column, DateTime, String, Uuid
+from sqlalchemy import Column, DateTime, String, Uuid, Boolean
 
 from app.database import Base
 
@@ -16,6 +16,18 @@ class User(Base):
     email = Column(String(255), nullable=False, unique=True, index=True)
     password_hash = Column(String(255), nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    password_reset_count = Column(DateTime, nullable=True)  # Track last password reset for rate limiting
+
+
+class PasswordResetToken(Base):
+    __tablename__ = "password_reset_tokens"
+
+    id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
+    user_id = Column(Uuid(as_uuid=True), nullable=False, index=True)
+    token_hash = Column(String(255), nullable=False, unique=True, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    used_at = Column(DateTime, nullable=True)
 
     @property
     def is_admin(self) -> bool:
@@ -43,3 +55,17 @@ class UserResponse(BaseModel):
     is_admin: bool = False
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class PasswordResetRequestBody(BaseModel):
+    email: EmailStr
+
+
+class PasswordResetConfirmBody(BaseModel):
+    token: str
+    new_password: str
+
+
+class PasswordResetResponse(BaseModel):
+    success: bool
+    message: str

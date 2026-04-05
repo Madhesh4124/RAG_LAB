@@ -29,6 +29,21 @@ def _add_user_id_column_if_missing(engine: Engine, table_name: str) -> None:
         conn.execute(text(ddl))
 
 
+def _add_password_reset_count_if_missing(engine: Engine) -> None:
+    if _column_exists(engine, "users", "password_reset_count"):
+        return
+
+    backend = engine.url.get_backend_name()
+    if backend == "postgresql":
+        ddl = "ALTER TABLE users ADD COLUMN password_reset_count TIMESTAMP"
+    else:
+        # SQLite
+        ddl = "ALTER TABLE users ADD COLUMN password_reset_count DATETIME"
+
+    with engine.begin() as conn:
+        conn.execute(text(ddl))
+
+
 def _seed_admin_user(db: Session) -> User:
     username = os.getenv("AUTH_SEED_USERNAME", "admin")
     email = os.getenv("AUTH_SEED_EMAIL", "admin@local")
@@ -95,6 +110,9 @@ def run_bootstrap_migrations(engine: Engine, db: Session) -> None:
     # Ensure ownership columns exist for pre-auth databases.
     for table in ("documents", "rag_configs", "chat_messages"):
         _add_user_id_column_if_missing(engine, table)
+
+    # Add missing password_reset_count column if needed
+    _add_password_reset_count_if_missing(engine)
 
     admin_user = _seed_admin_user(db)
     _backfill_user_ids(db, admin_user.id)

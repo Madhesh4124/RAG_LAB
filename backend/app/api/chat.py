@@ -134,6 +134,13 @@ def chat_endpoint(
 ):
     from app.api.evaluation import score_message
     from app.services.pipeline_manager import PipelineManager
+    from app.services.rate_limiter import get_rate_limiter
+    
+    # Check rate limit for LLM calls
+    rate_limiter = get_rate_limiter()
+    allowed, remaining, error_msg = rate_limiter.check_rate_limit(current_user.id, "llm")
+    if not allowed:
+        raise HTTPException(status_code=429, detail=error_msg)
 
     doc_stmt = select(Document).where(Document.id == doc_id, Document.user_id == current_user.id)
     cfg_stmt = select(RAGConfig).where(
@@ -190,6 +197,8 @@ def chat_endpoint(
         timer.start("llm_time_ms")
         try:
             answer = pipeline.generate(query, retrieved_chunks_only)
+            # Record successful LLM call
+            rate_limiter.record_call(current_user.id, "llm")
         except Exception:
             answer = _fallback_answer_from_chunks(query, retrieved_chunks_only)
         finally:
@@ -300,6 +309,13 @@ async def chat_stream_endpoint(
 ):
     """Streaming version for better perceived latency."""
     from app.services.pipeline_manager import PipelineManager
+    from app.services.rate_limiter import get_rate_limiter
+    
+    # Check rate limit for LLM calls
+    rate_limiter = get_rate_limiter()
+    allowed, remaining, error_msg = rate_limiter.check_rate_limit(current_user.id, "llm")
+    if not allowed:
+        raise HTTPException(status_code=429, detail=error_msg)
 
     requested_ids = doc_ids or [doc_id]
     normalized_ids = []
@@ -366,6 +382,9 @@ async def chat_stream_endpoint(
         for token in pipeline.generate_stream(query, chunks):
             full_response += token
             yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
+        
+        # Record successful LLM call
+        rate_limiter.record_call(current_user.id, "llm")
 
         # Notify UI immediately that generation is complete.
         yield f"data: {json.dumps({'type': 'done'})}\n\n"

@@ -6,6 +6,7 @@ import Compare from "./pages/Compare";
 import QuickChat from "./pages/QuickChat";
 import Admin from "./pages/Admin";
 import Login from "./pages/Login";
+import PasswordReset from "./pages/PasswordReset";
 import ModeSelect from "./pages/ModeSelect";
 import { useAuth } from "./hooks/useAuth";
 
@@ -76,6 +77,7 @@ export default function App() {
        <Routes>
   <Route path="/" element={<Navigate to="/login" replace />} />
   <Route path="/login" element={<Login />} />
+  <Route path="/password-reset" element={<PasswordReset />} />
   <Route path="/mode-select" element={<ProtectedRoute><ModeSelect /></ProtectedRoute>} />
   <Route path="/setup" element={<ProtectedRoute><Setup /></ProtectedRoute>} />
   <Route path="/preview" element={<ProtectedRoute><Preview /></ProtectedRoute>} />

@@ -22,6 +22,8 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
 def _is_admin_user(user: User) -> bool:
+    if getattr(user, "is_admin", False):
+        return True
     seed_username = os.getenv("AUTH_SEED_USERNAME", "admin")
     seed_email = os.getenv("AUTH_SEED_EMAIL", "admin@local")
     return user.username == seed_username or user.email == seed_email

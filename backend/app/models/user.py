@@ -15,6 +15,7 @@ class User(Base):
     username = Column(String(100), nullable=False, unique=True, index=True)
     email = Column(String(255), nullable=False, unique=True, index=True)
     password_hash = Column(String(255), nullable=False)
+    is_admin = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     password_reset_count = Column(DateTime, nullable=True)  # Track last password reset for rate limiting
 
@@ -28,12 +29,6 @@ class PasswordResetToken(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     expires_at = Column(DateTime, nullable=False)
     used_at = Column(DateTime, nullable=True)
-
-    @property
-    def is_admin(self) -> bool:
-        seed_username = os.getenv("AUTH_SEED_USERNAME", "admin")
-        seed_email = os.getenv("AUTH_SEED_EMAIL", "admin@local")
-        return self.username == seed_username or self.email == seed_email
 
 
 class UserSignupRequest(BaseModel):

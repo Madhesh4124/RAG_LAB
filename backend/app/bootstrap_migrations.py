@@ -44,12 +44,33 @@ def _add_password_reset_count_if_missing(engine: Engine) -> None:
         conn.execute(text(ddl))
 
 
+def _add_is_admin_if_missing(engine: Engine) -> None:
+    if _column_exists(engine, "users", "is_admin"):
+        return
+
+    backend = engine.url.get_backend_name()
+    if backend == "postgresql":
+        ddl = "ALTER TABLE users ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT FALSE"
+    else:
+        # SQLite
+        ddl = "ALTER TABLE users ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT 0"
+
+    with engine.begin() as conn:
+        conn.execute(text(ddl))
+
+
 def _seed_admin_user(db: Session) -> User:
     username = os.getenv("AUTH_SEED_USERNAME", "admin")
     email = os.getenv("AUTH_SEED_EMAIL", "admin@local")
 
     user = db.query(User).filter(User.username == username).first()
     if user:
+        # Ensure existing seed user has admin privileges.
+        if not user.is_admin:
+            user.is_admin = True
+            db.add(user)
+            db.commit()
+            db.refresh(user)
         return user
 
     # Import lazily to avoid circular imports.
@@ -60,6 +81,7 @@ def _seed_admin_user(db: Session) -> User:
         username=username,
         email=email,
         password_hash=hash_password(password),
+        is_admin=True,
     )
     db.add(user)
     db.commit()
@@ -113,6 +135,7 @@ def run_bootstrap_migrations(engine: Engine, db: Session) -> None:
 
     # Add missing password_reset_count column if needed
     _add_password_reset_count_if_missing(engine)
+    _add_is_admin_if_missing(engine)
 
     admin_user = _seed_admin_user(db)
     _backfill_user_ids(db, admin_user.id)

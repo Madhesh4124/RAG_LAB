@@ -89,6 +89,36 @@ def _seed_admin_user(db: Session) -> User:
     return user
 
 
+def _seed_sample_user(db: Session) -> User:
+    username = os.getenv("AUTH_SAMPLE_USERNAME", "sample")
+    email = os.getenv("AUTH_SAMPLE_EMAIL", "sample@local")
+
+    user = db.query(User).filter(User.username == username).first()
+    if user:
+        # Ensure sample account is always non-admin.
+        if user.is_admin:
+            user.is_admin = False
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+        return user
+
+    # Import lazily to avoid circular imports.
+    from app.auth import hash_password
+
+    password = os.getenv("AUTH_SAMPLE_PASSWORD", "sample")
+    user = User(
+        username=username,
+        email=email,
+        password_hash=hash_password(password),
+        is_admin=False,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
 def _backfill_user_ids(db: Session, admin_user_id: uuid.UUID) -> None:
     uid = str(admin_user_id)
 
@@ -138,4 +168,5 @@ def run_bootstrap_migrations(engine: Engine, db: Session) -> None:
     _add_is_admin_if_missing(engine)
 
     admin_user = _seed_admin_user(db)
+    _seed_sample_user(db)
     _backfill_user_ids(db, admin_user.id)

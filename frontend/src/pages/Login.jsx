@@ -37,12 +37,29 @@ export default function Login() {
     }
   };
 
+  const useSampleAccount = () => {
+    setMode("login");
+    setIdentifier("sample");
+    setPassword("sample");
+    setError("");
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
       <div className="w-full max-w-md bg-white border border-gray-200 rounded-2xl shadow-sm p-6 space-y-5">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">RAG Lab</h1>
           <p className="text-sm text-gray-500 mt-1">Sign in to continue</p>
+          <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50 p-3">
+            <p className="text-xs text-blue-800">Test account: username sample | password sample</p>
+            <button
+              type="button"
+              onClick={useSampleAccount}
+              className="mt-2 text-xs font-medium text-blue-700 hover:text-blue-800 hover:underline"
+            >
+              Use sample account
+            </button>
+          </div>
         </div>
 
         <div className="grid grid-cols-2 gap-2 bg-gray-100 p-1 rounded-xl">

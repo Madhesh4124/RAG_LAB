@@ -5,8 +5,10 @@ Uses LangChain's Chroma wrapper to store and query vector embeddings.
 """
 
 import os
+import tempfile
 import uuid
 import warnings
+from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from chromadb.config import Settings
@@ -55,8 +57,41 @@ class ChromaStore(BaseVectorStore):
 
     def __init__(self, collection_name: str = "rag_collection") -> None:
         self.collection_name = collection_name
-        self.persist_dir = os.getenv("CHROMA_PERSIST_DIR", "./chroma_db")
+        self.persist_dir = self._resolve_persist_dir()
         self.collection_metadata = {"hnsw:space": "cosine"}
+
+    def _resolve_persist_dir(self) -> str:
+        candidates = [
+            os.getenv("CHROMA_PERSIST_DIR", "").strip(),
+            "/data/chroma_db",
+            str(Path(tempfile.gettempdir()) / "rag_lab_chroma_db"),
+        ]
+        seen = set()
+
+        for candidate in candidates:
+            if not candidate:
+                continue
+            candidate_path = str(Path(candidate).resolve())
+            if candidate_path in seen:
+                continue
+            seen.add(candidate_path)
+
+            try:
+                path_obj = Path(candidate_path)
+                path_obj.mkdir(parents=True, exist_ok=True)
+
+                # Verify write capability up front to avoid runtime failures.
+                probe = path_obj / ".write_test"
+                probe.write_text("ok", encoding="utf-8")
+                probe.unlink(missing_ok=True)
+                return candidate_path
+            except Exception:
+                continue
+
+        raise RuntimeError(
+            "No writable Chroma persist directory available. "
+            "Set CHROMA_PERSIST_DIR to a writable path."
+        )
 
     def _get_collection_space(self, vs: Chroma) -> str:
         metadata = getattr(vs._collection, "metadata", None) or {}

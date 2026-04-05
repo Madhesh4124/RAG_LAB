@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import importlib
+import os
 import shutil
+import tempfile
 import threading
 from pathlib import Path
 from typing import Any
@@ -23,7 +25,36 @@ from app.services.embedding.huggingface_api_embedder import HuggingFaceAPIEmbedd
 from app.services.embedding.google_embedder import GoogleEmbedder
 from app.services.embedding.nvidia_embedder import NvidiaEmbedder
 
-_PERSIST_DIR = Path(__file__).resolve().parents[2] / "chroma_store"
+def _resolve_persist_dir() -> Path:
+    candidates = [
+        os.getenv("CHROMA_PERSIST_DIR", "").strip(),
+        "/data/chroma_store",
+        str(Path(tempfile.gettempdir()) / "rag_lab_compare_chroma_store"),
+    ]
+
+    seen = set()
+    for candidate in candidates:
+        if not candidate:
+            continue
+        candidate_path = Path(candidate).resolve()
+        if str(candidate_path) in seen:
+            continue
+        seen.add(str(candidate_path))
+        try:
+            candidate_path.mkdir(parents=True, exist_ok=True)
+            probe = candidate_path / ".write_test"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+            return candidate_path
+        except Exception:
+            continue
+
+    fallback = Path(__file__).resolve().parents[2] / "chroma_store"
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback
+
+
+_PERSIST_DIR = _resolve_persist_dir()
 _EMBEDDER_CACHE: dict[tuple[str, str], "_EmbeddingAdapter"] = {}
 _EMBEDDER_CACHE_LOCK = threading.Lock()
 

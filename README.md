@@ -59,7 +59,6 @@ It includes:
 - Streaming chat endpoint (`/api/chat/stream`) with status, metadata, token stream, done events.
 - Stores user/assistant messages.
 - Stores timing/quality metrics per assistant message.
-- Auto-evaluation hook for faithfulness/relevancy/context metrics (best-effort).
 - System reset endpoint to clear cache/history/vector storage.
 
 ### Compare mode
@@ -69,21 +68,6 @@ It includes:
 - Supports embedding provider/model selection in compare config modal (NVIDIA + Hugging Face model sets).
 - Per-config indexing status in cards and staging panel.
 - Staging panel shows a filling progress bar while a config is indexing.
-
-### Evaluation and analytics
-- Message-level evaluation endpoint with:
-  - `faithfulness`
-  - `answer_relevancy`
-  - `context_precision`
-  - `context_recall`
-- Analysis endpoint includes:
-  - ranked chunks
-  - score distribution
-  - chunk diversity
-  - timing breakdown
-- Metrics summary endpoint returns:
-  - per-config aggregates
-  - per-query rows
 
 ## Project Structure
 
@@ -132,12 +116,6 @@ RAG_LAB/
 - `POST /stream`
 - `GET /history/{doc_id}`
 - `POST /reset`
-
-### Analysis / Evaluation / Metrics
-- `GET /api/analysis/{message_id}`
-- `POST /api/evaluation/score`
-- `POST /api/evaluation/faithfulness` (alias)
-- `GET /api/metrics/summary?document_id=...`
 
 ### Compare module (`/compare`)
 - `POST /index`

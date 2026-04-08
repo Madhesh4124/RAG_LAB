@@ -53,7 +53,11 @@ async def compare_index(
 
 
 @router.post("/run", response_model=CompareResponse)
-async def run_compare(request: CompareRequest, current_user: User = Depends(get_current_user)) -> CompareResponse:
+async def run_compare(
+    request: CompareRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> CompareResponse:
     if len(request.configs) < 1 or len(request.configs) > 4:
         raise HTTPException(status_code=422, detail="Between 1 and 4 configs required.")
 
@@ -69,7 +73,8 @@ async def run_compare(request: CompareRequest, current_user: User = Depends(get_
                 detail=f"Config '{config.collection_name}' has not been indexed yet. Call /compare/index first.",
             )
 
-    results = await run_comparison(query=request.query, configs=request.configs, user_scope=str(current_user.id))
+    results = await run_comparison(query=request.query, configs=request.configs, user_scope=str(current_user.id), db=db)
+    await db.commit()
     return CompareResponse(query=request.query, results=results)
 
 

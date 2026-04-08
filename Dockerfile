@@ -15,4 +15,4 @@ COPY backend /app/backend
 WORKDIR /app/backend
 
 # Hugging Face Spaces Docker runtime exposes PORT (default 7860).
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-7860}"]
+CMD ["sh", "-c", "gunicorn app.main:app -k uvicorn.workers.UvicornWorker -w ${WEB_CONCURRENCY:-4} --bind 0.0.0.0:${PORT:-7860} --timeout ${GUNICORN_TIMEOUT:-120}"]

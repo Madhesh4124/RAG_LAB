@@ -119,7 +119,26 @@ async def preview_chunks(
         chunker = PipelineFactory.create_chunker(chunker_cfg, embedder=embedder)
 
         metadata = {"filename": doc.filename, "file_type": doc.file_type}
-        chunks = chunker.chunk(doc.content, metadata)
+
+        # PDF rows store base64-encoded binary in `content`; decode/extract text
+        # before preview chunking to avoid showing raw PDF bytes.
+        if (doc.file_type or "").lower() == "pdf":
+            try:
+                pages = FileProcessor.extract_pdf_pages(doc.content, doc.filename)
+                chunks = []
+                for page in pages:
+                    page_text = (page.get("text") or "").strip()
+                    if not page_text:
+                        continue
+                    page_metadata = metadata.copy()
+                    page_metadata.update(page.get("metadata") or {})
+                    chunks.extend(chunker.chunk(page_text, page_metadata))
+            except Exception:
+                # Fallback for malformed or legacy PDF rows.
+                plain_text = FileProcessor.extract_pdf_text_fallback(doc.content, doc.filename)
+                chunks = chunker.chunk(plain_text, metadata)
+        else:
+            chunks = chunker.chunk(doc.content, metadata)
 
         enriched_chunks = []
         for idx, chunk in enumerate(chunks):

@@ -1,16 +1,8 @@
 {
   "rewrites": [
     {
-      "source": "/api/:path*",
-      "destination": "https://madhesh4124-rag-backend.hf.space/api/:path*"
-    },
-    {
-      "source": "/compare/:path*",
-      "destination": "https://madhesh4124-rag-backend.hf.space/compare/:path*"
-    },
-    {
-      "source": "/health",
-      "destination": "https://madhesh4124-rag-backend.hf.space/health"
+      "source": "/(.*)",
+      "destination": "/index.html"
     }
   ]
 }

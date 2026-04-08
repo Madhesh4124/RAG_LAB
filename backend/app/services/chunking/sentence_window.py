@@ -5,15 +5,17 @@ Builds sentence-level chunks for matching, while storing a surrounding
 sentence window in metadata for richer generation context.
 """
 
-import uuid
-import re
+import copy
 import logging
+import os
+import re
+import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from app.services.chunking.base import BaseChunker, Chunk
 
-# Keep sentence splitting aligned with SemanticChunker.
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
+# Keep sentence splitting aligned with SemanticChunker (split on paragraph boundaries).
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n\n+")
 logger = logging.getLogger(__name__)
 
 
@@ -73,7 +75,20 @@ class SentenceWindowChunker(BaseChunker):
     @staticmethod
     def _split_sentences(text: str) -> List[str]:
         segments = _SENTENCE_SPLIT_RE.split(text)
-        return [s for s in segments if s.strip()]
+        sentences = [s for s in segments if s.strip()]
+        
+        # Sub-split segments that are too long to prevent memory blow-up.
+        max_segment_chars = int(os.getenv("SENTENCE_WINDOW_MAX_SEGMENT_CHARS", "2000"))
+        final_sentences = []
+        for s in sentences:
+            if len(s) > max_segment_chars:
+                for i in range(0, len(s), max_segment_chars):
+                    piece = s[i : i + max_segment_chars]
+                    if piece.strip():
+                        final_sentences.append(piece)
+            else:
+                final_sentences.append(s)
+        return final_sentences
 
     @staticmethod
     def _find_sentence_span(
@@ -130,16 +145,21 @@ class SentenceWindowChunker(BaseChunker):
             return []
 
         chunks: List[Chunk] = []
-        cursor = 0  # strictly moves forward — prevents repeated-sentence bug
+        cursor = 0
+        spans: List[Optional[Tuple[int, int]]] = []
+        for sentence in sentences:
+            span = self._find_sentence_span(text, sentence, cursor)
+            spans.append(span)
+            if span:
+                cursor = span[1]
 
         for idx, sentence in enumerate(sentences):
-            span = self._find_sentence_span(text, sentence, cursor)
+            span = spans[idx]
             if span is None:
                 # Sentence not found even with flexible search; skip.
-                logger.warning("Could not locate sentence span at cursor=%s: %r", cursor, sentence[:120])
+                logger.warning("Could not locate sentence span for: %r", sentence[:120])
                 continue
             start_idx, end_idx = span
-            cursor = end_idx  # advance cursor past this sentence
 
             # Compute left/right reach independently so the centre sentence
             # always occupies exactly one slot and the total window size
@@ -147,10 +167,27 @@ class SentenceWindowChunker(BaseChunker):
             left = self.window_size // 2
             right = self.window_size - left - 1  # reserves 1 slot for the centre
             window_start = max(0, idx - left)
-            window_end = min(len(sentences), idx + right + 1)
-            window_text = " ".join(sentences[window_start:window_end])
+            window_end = min(len(sentences) - 1, idx + right)
 
-            chunk_metadata = metadata.copy()
+            # Extract window_text using spans to avoid whitespace drift
+            w_start_span = None
+            for i in range(window_start, window_end + 1):
+                if spans[i] is not None:
+                    w_start_span = spans[i][0]
+                    break
+                    
+            w_end_span = None
+            for i in range(window_end, window_start - 1, -1):
+                if spans[i] is not None:
+                    w_end_span = spans[i][1]
+                    break
+                    
+            if w_start_span is not None and w_end_span is not None:
+                window_text = text[w_start_span:w_end_span]
+            else:
+                window_text = sentence
+
+            chunk_metadata = copy.deepcopy(metadata)
             chunk_metadata["window_text"] = window_text
 
             if self.max_chunk_size and self.length_fn(sentence) > self.max_chunk_size:

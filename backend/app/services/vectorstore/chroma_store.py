@@ -8,9 +8,11 @@ import os
 import tempfile
 import uuid
 import warnings
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+from chromadb import PersistentClient
 from chromadb.config import Settings
 from dotenv import load_dotenv
 from langchain_core.documents import Document
@@ -45,6 +47,25 @@ class _EmbedderAdapter:
 
     def embed_query(self, text: str) -> List[float]:
         return self.embedder.embed_text(text)
+
+
+_PERSISTENT_CLIENT_CACHE: dict[str, Any] = {}
+_PERSISTENT_CLIENT_CACHE_LOCK = threading.Lock()
+
+
+def _get_cached_persistent_client(persist_dir: str):
+    cache_key = str(Path(persist_dir).resolve())
+    with _PERSISTENT_CLIENT_CACHE_LOCK:
+        cached = _PERSISTENT_CLIENT_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    client_settings = Settings(anonymized_telemetry=False)
+    client = PersistentClient(path=cache_key, settings=client_settings)
+
+    with _PERSISTENT_CLIENT_CACHE_LOCK:
+        _PERSISTENT_CLIENT_CACHE.setdefault(cache_key, client)
+        return _PERSISTENT_CLIENT_CACHE[cache_key]
 
 
 class ChromaStore(BaseVectorStore):
@@ -116,12 +137,11 @@ class ChromaStore(BaseVectorStore):
 
     def _get_vectorstore(self, embedder: BaseEmbedder = None) -> Chroma:
         embedding_function = _EmbedderAdapter(embedder) if embedder else None
-        chroma_settings = Settings(anonymized_telemetry=False)
+        client = _get_cached_persistent_client(self.persist_dir)
         return Chroma(
             collection_name=self.collection_name,
             embedding_function=embedding_function,
-            persist_directory=self.persist_dir,
-            client_settings=chroma_settings,
+            client=client,
             collection_metadata=self.collection_metadata,
         )
 
@@ -156,13 +176,12 @@ class ChromaStore(BaseVectorStore):
             docs.append(doc)
 
         adapter = _EmbedderAdapter(embedder)
-        chroma_settings = Settings(anonymized_telemetry=False)
+        client = _get_cached_persistent_client(self.persist_dir)
         Chroma.from_documents(
             documents=docs,
             embedding=adapter,
             collection_name=self.collection_name,
-            persist_directory=self.persist_dir,
-            client_settings=chroma_settings,
+            client=client,
             collection_metadata=self.collection_metadata,
         )
 

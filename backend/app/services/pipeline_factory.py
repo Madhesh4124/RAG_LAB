@@ -14,6 +14,11 @@ from app.services.rag_pipeline import RAGPipeline
 from app.services.memory.base import BaseMemory
 
 
+class PipelineConfigError(Exception):
+    """Exception raised when pipeline configuration is invalid or missing dependencies."""
+    pass
+
+
 class PipelineFactory:
     """Factory to create RAG pipelines dynamically from configurations."""
 
@@ -87,31 +92,34 @@ class PipelineFactory:
                 "max_chunk_size": kwargs.get("max_chunk_size", 150),
             }
 
-        if strategy == "fixed_size":
-            from app.services.chunking.fixed_size import FixedSizeChunker
-            return FixedSizeChunker(**kwargs)
-        elif strategy == "semantic":
-            from app.services.chunking.semantic import SemanticChunker
-            return SemanticChunker(**kwargs)
-        elif strategy in ("chapter", "chapter_based"):
-            from app.services.chunking.chapter_based import ChapterChunker
-            return ChapterChunker(**kwargs)
-        elif strategy == "recursive":
-            from app.services.chunking.recursive import RecursiveChunker
-            return RecursiveChunker(**kwargs)
-        elif strategy == "regex":
-            from app.services.chunking.regex_chunker import RegexChunker
-            return RegexChunker(**kwargs)
-        elif strategy == "sentence_window":
-            from app.services.chunking.sentence_window import SentenceWindowChunker
-            return SentenceWindowChunker(**kwargs)
-        else:
-            raise ValueError(f"Unknown chunking strategy: {strategy}")
+        try:
+            if strategy == "fixed_size":
+                from app.services.chunking.fixed_size import FixedSizeChunker
+                return FixedSizeChunker(**kwargs)
+            elif strategy == "semantic":
+                from app.services.chunking.semantic import SemanticChunker
+                return SemanticChunker(**kwargs)
+            elif strategy in ("chapter", "chapter_based"):
+                from app.services.chunking.chapter_based import ChapterChunker
+                return ChapterChunker(**kwargs)
+            elif strategy == "recursive":
+                from app.services.chunking.recursive import RecursiveChunker
+                return RecursiveChunker(**kwargs)
+            elif strategy == "regex":
+                from app.services.chunking.regex_chunker import RegexChunker
+                return RegexChunker(**kwargs)
+            elif strategy == "sentence_window":
+                from app.services.chunking.sentence_window import SentenceWindowChunker
+                return SentenceWindowChunker(**kwargs)
+            else:
+                raise PipelineConfigError(f"Unknown chunking strategy: {strategy}")
+        except ImportError as e:
+            raise PipelineConfigError(f"Failed to import chunker for strategy {strategy}: {e}")
 
     @staticmethod
     def create_embedder(config: Dict[str, Any]) -> BaseEmbedder:
         """Create an embedder dynamically based on the configuration."""
-        provider = config.get("provider")
+        provider = config.get("provider", "huggingface")
         model = config.get("model")
 
         # Setup kwargs specifically for the requested model argument
@@ -119,17 +127,19 @@ class PipelineFactory:
         if model is not None:
             kwargs["model"] = model
 
-        if provider == "google":
-            from app.services.embedding.google_embedder import GoogleEmbedder
-            return GoogleEmbedder(**kwargs)
-        elif provider == "nvidia":
-            from app.services.embedding.nvidia_embedder import NvidiaEmbedder
-            return NvidiaEmbedder(**kwargs)
-        elif provider == "huggingface":
-            from app.services.embedding.huggingface_api_embedder import HuggingFaceAPIEmbedder
-            return HuggingFaceAPIEmbedder(**kwargs)
-        else:
-            raise ValueError(f"Unknown embedding provider: {provider}")
+        try:
+            if provider == "google":
+                raise PipelineConfigError("Unknown embedding provider: google")
+            elif provider == "nvidia":
+                from app.services.embedding.nvidia_embedder import NvidiaEmbedder
+                return NvidiaEmbedder(**kwargs)
+            elif provider == "huggingface":
+                from app.services.embedding.huggingface_api_embedder import HuggingFaceAPIEmbedder
+                return HuggingFaceAPIEmbedder(**kwargs)
+            else:
+                raise PipelineConfigError(f"Unknown embedding provider: {provider}")
+        except ImportError as e:
+            raise PipelineConfigError(f"Failed to import embedder for provider {provider}: {e}")
 
     @staticmethod
     def create_vectorstore(config: Dict[str, Any]) -> BaseVectorStore:
@@ -143,10 +153,13 @@ class PipelineFactory:
             strategy = "chroma"
 
         if strategy == "chroma":
-            from app.services.vectorstore.chroma_store import ChromaStore
-            return ChromaStore(**kwargs)
+            try:
+                from app.services.vectorstore.chroma_store import ChromaStore
+                return ChromaStore(**kwargs)
+            except ImportError as e:
+                raise PipelineConfigError(f"Failed to import ChromaStore: {e}")
         else:
-            raise ValueError(f"Unknown vectorstore strategy: {strategy}")
+            raise PipelineConfigError(f"Unknown vectorstore strategy: {strategy}")
 
     @staticmethod
     def create_retriever(config: Dict[str, Any], vectorstore: BaseVectorStore, embedder: BaseEmbedder) -> Any:
@@ -252,6 +265,9 @@ class PipelineFactory:
         embedder = PipelineFactory.create_embedder(embedder_cfg)
         chunker = PipelineFactory.create_chunker(chunker_cfg, embedder=embedder)
         vectorstore = PipelineFactory.create_vectorstore(vectorstore_cfg)
+
+        if not embedder or not chunker or not vectorstore:
+            raise PipelineConfigError("Failed to initialize required pipeline components. Chunker, embedder, and vectorstore are mandatory.")
 
         retriever = PipelineFactory.create_retriever(config.get("retriever", {}), vectorstore, embedder)
 

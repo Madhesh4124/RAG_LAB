@@ -1,3 +1,4 @@
+import copy
 import re
 from typing import Any, Callable, Dict, List, Tuple
 from app.services.chunking.base import BaseChunker, Chunk
@@ -27,6 +28,12 @@ class RegexChunker(BaseChunker):
             raise ValueError("pattern must be a non-empty string")
         if min_chunk_size < 0:
             raise ValueError("min_chunk_size must be non-negative")
+            
+        try:
+            self._compiled_pattern = re.compile(pattern)
+        except re.error as e:
+            raise ValueError(f"Invalid regex pattern provided: {e}")
+            
         self.pattern = pattern
         self.min_chunk_size = min_chunk_size
         self.length_fn = length_function
@@ -44,7 +51,7 @@ class RegexChunker(BaseChunker):
         pieces: List[Tuple[str, int, int]] = []
         prev_end = 0
 
-        for match in re.finditer(self.pattern, text):
+        for match in self._compiled_pattern.finditer(text):
             piece = text[prev_end : match.start()]
             if piece:  # skip empty strings caused by leading/trailing delimiters
                 pieces.append((piece, prev_end, match.start()))
@@ -102,7 +109,7 @@ class RegexChunker(BaseChunker):
                 chunks.append(
                     Chunk(
                         text=buffer_text,
-                        metadata=metadata.copy(),
+                        metadata=copy.deepcopy(metadata),
                         start_char=buffer_start,
                         end_char=buffer_start + len(buffer_text),
                     )
@@ -116,7 +123,7 @@ class RegexChunker(BaseChunker):
             chunks.append(
                 Chunk(
                     text=buffer_text,
-                    metadata=metadata.copy(),
+                    metadata=copy.deepcopy(metadata),
                     start_char=buffer_start,
                     end_char=buffer_start + len(buffer_text),
                 )

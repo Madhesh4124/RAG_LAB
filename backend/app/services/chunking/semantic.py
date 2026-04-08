@@ -1,12 +1,14 @@
 """
 Semantic chunking strategy.
 
-Splits text at natural sentence boundaries (periods, newlines) and
+Splits text at natural sentence boundaries (periods, paragraphs) and
 groups sentences together until a size threshold is reached, then
 starts a new chunk.
 """
 
+import copy
 import logging
+import os
 import re
 import uuid
 from math import sqrt
@@ -16,9 +18,9 @@ from app.services.chunking.base import BaseChunker, Chunk
 from app.services.embedding.base import BaseEmbedder
 
 # Regex that splits on sentence-ending punctuation (.!?) followed by
-# whitespace, or on newline characters — while keeping the delimiter
-# attached to the preceding sentence.
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
+# whitespace, or on double newlines (paragraph boundaries) — while avoiding
+# splitting on single newlines within an unbroken sentence.
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n\n+")
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +107,7 @@ class SemanticChunker(BaseChunker):
         self.max_sentences_per_chunk = max_sentences_per_chunk
         self.smoothing_margin = smoothing_margin
         self.length_fn = length_function
-        self.debug = debug
+        self.debug = debug or (os.getenv("DEBUG_SEMANTIC", "0") == "1")
         self.require_embedder = require_embedder
 
         if self.embedder is None and self.require_embedder:
@@ -122,14 +124,33 @@ class SemanticChunker(BaseChunker):
         """Split *text* into sentence-level segments.
 
         Splits on sentence-ending punctuation (.!?) followed by
-        whitespace, as well as newline characters.  Empty segments
+        whitespace, as well as paragraph boundaries (double newlines). Empty segments
         are discarded.
+
+        If a resulting segment is excessively long (e.g., > 5000 chars),
+        it is further sub-split by character length to avoid exceeding
+        downstream embedding model token limits.
 
         Returns:
             A list of non-empty sentence strings.
         """
         segments = _SENTENCE_SPLIT_RE.split(text)
-        return [s for s in segments if s.strip()]
+        sentences = [s for s in segments if s.strip()]
+
+        # Sub-split segments that are too long (safety for embedder limits).
+        max_segment_chars = int(os.getenv("SEMANTIC_MAX_SEGMENT_CHARS", "2000"))
+        final_sentences = []
+        for s in sentences:
+            if len(s) > max_segment_chars:
+                # Sub-split by character count
+                for i in range(0, len(s), max_segment_chars):
+                    piece = s[i : i + max_segment_chars]
+                    if piece.strip():
+                        final_sentences.append(piece)
+            else:
+                final_sentences.append(s)
+
+        return final_sentences
 
     @staticmethod
     def _cosine_similarity(a: List[float], b: List[float]) -> float:
@@ -251,10 +272,10 @@ class SemanticChunker(BaseChunker):
         return spans
 
     @staticmethod
-    def _chunk_text(sentences: List[str], start_idx: int, end_idx: int) -> str:
-        return " ".join(sentences[start_idx : end_idx + 1])
+    def _chunk_text(text: str, spans: List[Tuple[int, int]], start_idx: int, end_idx: int) -> str:
+        return text[spans[start_idx][0] : spans[end_idx][1]]
 
-    def _chunk_span_length(
+    def _span_char_length(
         self,
         spans: List[Tuple[int, int]],
         start_idx: int,
@@ -392,11 +413,8 @@ class SemanticChunker(BaseChunker):
         # calls to length_fn on growing slices (O(n) instead of O(n²)).
         sentence_token_lengths = [self.length_fn(s) for s in sentences]
 
-        # Fix: pass an actual text slice to length_fn, not a raw integer.
-        if spans:
-            current_length = self.length_fn(text[spans[0][0]:spans[0][1]])
-        else:
-            current_length = self.length_fn(sentences[0])
+        # Optimized initial length calculation using precomputed metrics
+        current_length = sentence_token_lengths[0] if sentence_token_lengths else 0
         current_sentence_count = 1
 
         running_centroid: Optional[List[float]] = None
@@ -415,11 +433,12 @@ class SemanticChunker(BaseChunker):
             # or tokens, and avoids re-tokenizing the growing slice each step.
             next_sentence_len = sentence_token_lengths[i]
             would_be_length = current_length + next_sentence_len
+            
+            # Helper logic for split limits moved to clear booleans here
             split_for_size = would_be_length > self.max_chunk_size
-            split_for_span = (
-                self.max_sentences_per_chunk is not None
-                and (current_sentence_count + 1) > self.max_sentences_per_chunk
-            )
+            split_for_span = False
+            if self.max_sentences_per_chunk is not None:
+                split_for_span = (current_sentence_count + 1) > self.max_sentences_per_chunk
 
             similarity: Optional[float] = None
             if embeddings and len(embeddings) > i:
@@ -451,12 +470,12 @@ class SemanticChunker(BaseChunker):
 
             if should_split:
                 end_idx = i - 1
-                chunk_text = self._chunk_text(sentences, chunk_start_idx, end_idx)
+                chunk_text = self._chunk_text(text, spans, chunk_start_idx, end_idx)
                 chunks.append(
                     Chunk(
                         id=uuid.uuid4(),
                         text=chunk_text,
-                        metadata=metadata.copy(),
+                        metadata=copy.deepcopy(metadata),
                         start_char=spans[chunk_start_idx][0],
                         end_char=spans[end_idx][1],
                     )
@@ -498,12 +517,12 @@ class SemanticChunker(BaseChunker):
                             running_centroid = None
                             centroid_count = 0
 
-        final_text = self._chunk_text(sentences, chunk_start_idx, len(sentences) - 1)
+        final_text = self._chunk_text(text, spans, chunk_start_idx, len(sentences) - 1)
         chunks.append(
             Chunk(
                 id=uuid.uuid4(),
                 text=final_text,
-                metadata=metadata.copy(),
+                metadata=copy.deepcopy(metadata),
                 start_char=spans[chunk_start_idx][0],
                 end_char=spans[len(sentences) - 1][1],
             )

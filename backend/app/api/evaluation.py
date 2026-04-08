@@ -1,3 +1,4 @@
+import logging
 import uuid
 from copy import deepcopy
 
@@ -18,6 +19,29 @@ from app.services.evaluation.faithfulness import FaithfulnessEvaluator
 from app.services.pipeline_factory import PipelineFactory
 
 router = APIRouter(prefix="/api/evaluation", tags=["evaluation"])
+logger = logging.getLogger(__name__)
+
+
+class EvaluationError(Exception):
+    """Base exception for evaluation failures."""
+    def __init__(self, message: str, status_code: int = 500):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class EvaluationNotFoundError(EvaluationError):
+    def __init__(self, message: str):
+        super().__init__(message, status_code=404)
+
+
+class EvaluationBadRequestError(EvaluationError):
+    def __init__(self, message: str):
+        super().__init__(message, status_code=400)
+
+
+class EvaluationServiceUnavailableError(EvaluationError):
+    def __init__(self, message: str):
+        super().__init__(message, status_code=503)
 
 
 def _chunks_from_payload(raw_chunks):
@@ -28,6 +52,8 @@ def _chunks_from_payload(raw_chunks):
             continue
 
         if isinstance(item, dict):
+            if "text" not in item:
+                raise EvaluationBadRequestError(f"Malformed chunk payload: missing 'text' key in element {idx}")
             chunks.append(
                 Chunk(
                     text=str(item.get("text", "")),
@@ -48,7 +74,7 @@ def score_message(
     chunks: list[Chunk] | None = None,
 ) -> EvaluationResult:
     if llm_client is None or getattr(llm_client, "llm", None) is None:
-        raise ValueError("LLM client is unavailable for evaluation")
+        raise EvaluationServiceUnavailableError("LLM client is unavailable for evaluation")
 
     parsed_chunks = chunks if chunks is not None else _chunks_from_payload(assistant_msg.retrieved_chunks or [])
 
@@ -58,17 +84,22 @@ def score_message(
         chunks=parsed_chunks,
         llm_client=llm_client,
     )
+    faithfulness = faithfulness if faithfulness is not None else 0.0
+
     answer_relevancy = AnswerRelevancyEvaluator().evaluate(
         query=query_text,
         answer=assistant_msg.content,
         llm_client=llm_client,
     )
+    answer_relevancy = answer_relevancy if answer_relevancy is not None else 0.0
+
     context_quality = ContextQualityEvaluator().evaluate(
         query=query_text,
         answer=assistant_msg.content,
         chunks=parsed_chunks,
         llm_client=llm_client,
     )
+    context_quality = context_quality or {"context_precision": 0.0, "context_recall": 0.0}
 
     result = EvaluationResult(
         message_id=assistant_msg.id,
@@ -85,9 +116,9 @@ async def score_message_by_id(db: AsyncSession, message_id: uuid.UUID, user_id: 
     msg_stmt = select(ChatMessage).where(ChatMessage.id == message_id, ChatMessage.user_id == user_id)
     msg = (await db.execute(msg_stmt)).scalars().first()
     if not msg:
-        raise ValueError("Message not found")
+        raise EvaluationNotFoundError("Message not found")
     if msg.role != "assistant":
-        raise ValueError("Scoring is only available for assistant messages")
+        raise EvaluationBadRequestError("Scoring is only available for assistant messages")
 
     query_stmt = (
         select(ChatMessage)
@@ -102,11 +133,11 @@ async def score_message_by_id(db: AsyncSession, message_id: uuid.UUID, user_id: 
     )
     user_msg = (await db.execute(query_stmt)).scalars().first()
     if not user_msg:
-        raise ValueError("Associated user query was not found")
+        raise EvaluationNotFoundError("Associated user query was not found")
 
     config = await db.get(RAGConfig, msg.config_id)
     if not config:
-        raise ValueError("RAG config not found")
+        raise EvaluationNotFoundError("RAG config not found")
 
     pipeline_config = deepcopy(config.config_json or {})
     vectorstore_cfg = deepcopy(pipeline_config.get("vectorstore", {}))
@@ -135,15 +166,11 @@ async def evaluate_score(
 ):
     try:
         result = await score_message_by_id(db=db, message_id=message_id, user_id=current_user.id)
-    except ValueError as exc:
-        text = str(exc)
-        if "not found" in text.lower():
-            raise HTTPException(status_code=404, detail=text)
-        if "only available" in text.lower():
-            raise HTTPException(status_code=400, detail=text)
-        if "unavailable" in text.lower():
-            raise HTTPException(status_code=503, detail=text)
-        raise HTTPException(status_code=500, detail=text)
+    except EvaluationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc))
+    except Exception as exc:
+        logger.exception("Unexpected error during evaluation")
+        raise HTTPException(status_code=500, detail="Internal server error during evaluation")
 
     await db.commit()
     await db.refresh(result)

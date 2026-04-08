@@ -9,8 +9,11 @@ import { useSession } from "../hooks/useSession";
 import { applyBestPreset, prepareChatSession, uploadDocument } from "../services/api";
 
 export default function QuickChat() {
-  const { docId, configId, filename, setDocId, setConfigId, setFilename, setMode } = useSession();
-  const [selectedDocIds, setSelectedDocIds] = useState(docId ? [docId] : []);
+  const { docId, docIds, configId, filename, setDocId, setDocIds, setConfigId, setFilename, setMode } = useSession();
+  const [selectedDocIds, setSelectedDocIds] = useState(() => {
+    if (Array.isArray(docIds) && docIds.length) return docIds.map((id) => String(id));
+    return docId ? [String(docId)] : [];
+  });
   const [stage, setStage] = useState("ready");
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -27,6 +30,10 @@ export default function QuickChat() {
   useEffect(() => {
     setMode("chat");
   }, []);
+
+  useEffect(() => {
+    setDocIds(selectedDocIds);
+  }, [selectedDocIds, setDocIds]);
 
   const handleUpload = async (files) => {
     const nextFiles = Array.from(files || []).filter(Boolean);

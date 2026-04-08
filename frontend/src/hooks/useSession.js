@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 const STORAGE_KEY = "rag_lab_session";
 
-const EMPTY_SESSION = { docId: null, configId: null, filename: null, mode: null };
+const EMPTY_SESSION = { docId: null, docIds: [], configId: null, filename: null, mode: null };
 
 function loadInitialSession() {
   try {
@@ -11,6 +11,7 @@ function loadInitialSession() {
     const parsed = JSON.parse(raw);
     return {
       docId: parsed?.docId || null,
+      docIds: Array.isArray(parsed?.docIds) ? parsed.docIds.map((id) => String(id)) : [],
       configId: parsed?.configId || null,
       filename: parsed?.filename || null,
       mode: parsed?.mode || null,
@@ -35,6 +36,11 @@ export function useSession() {
     setSession((prev) => ({ ...prev, configId }));
   }, []);
 
+  const setDocIds = useCallback((docIds) => {
+    const normalized = Array.isArray(docIds) ? docIds.map((id) => String(id)) : [];
+    setSession((prev) => ({ ...prev, docIds: normalized }));
+  }, []);
+
   const setFilename = useCallback((filename) => {
     setSession((prev) => ({ ...prev, filename }));
   }, []);
@@ -44,15 +50,17 @@ export function useSession() {
   }, []);
 
   const clear = useCallback(() => {
-    setSession({ docId: null, configId: null, filename: null, mode: null });
+    setSession({ docId: null, docIds: [], configId: null, filename: null, mode: null });
   }, []);
 
   return {
     docId: session.docId,
+    docIds: session.docIds,
     configId: session.configId,
     filename: session.filename,
     mode: session.mode,
     setDocId,
+    setDocIds,
     setConfigId,
     setFilename,
     setMode,

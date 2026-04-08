@@ -26,9 +26,10 @@ describe("DocumentPicker", () => {
     const onSelect = vi.fn();
     render(<DocumentPicker value="" onSelect={onSelect} />);
 
-    expect(await screen.findByRole("option", { name: "alpha.txt" })).toBeInTheDocument();
+    expect(await screen.findByText("alpha.txt")).toBeInTheDocument();
 
-    fireEvent.change(screen.getByRole("combobox"), { target: { value: "doc-b" } });
+    const radios = screen.getAllByRole("radio");
+    fireEvent.click(radios[1]);
 
     expect(onSelect).toHaveBeenCalledWith({ id: "doc-b", filename: "beta.txt" });
   });
@@ -39,7 +40,7 @@ describe("DocumentPicker", () => {
 
     render(<DocumentPicker value="" onSelect={vi.fn()} />);
 
-    await screen.findByRole("combobox");
+    await screen.findByPlaceholderText("Search by filename");
 
     fireEvent.change(screen.getByPlaceholderText("Search by filename"), { target: { value: "zeta" } });
     fireEvent.click(screen.getByRole("button", { name: "Find" }));

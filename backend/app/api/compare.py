@@ -1,5 +1,6 @@
 import uuid
 import os
+import logging
 from copy import deepcopy
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Body
@@ -15,8 +16,13 @@ from app.models.chat import ChatMessage
 from app.models.metrics import Metrics
 from app.services.pipeline_factory import PipelineFactory
 from app.utils.timing import PipelineTimer
+from app.compare.compare_runner import _summarize_compare_context
+from app.compare.utils import calc_avg_similarity
+from app.services.query_classifier import classify_query
+from app.utils.file_processor import FileProcessor
 
 router = APIRouter(prefix="/api/compare", tags=["compare"])
+logger = logging.getLogger(__name__)
 
 
 @router.post("")
@@ -67,6 +73,7 @@ async def compare_configs(
         truncated = True
     
     results = []
+    query_mode = classify_query(query)
     
     for config in configs:
         try:
@@ -87,48 +94,92 @@ async def compare_configs(
             
             # Index document
             metadata = {"filename": doc.filename, "file_type": doc.file_type}
-            await pipeline.aindex_document(
-                text=doc.content,
-                doc_id=str(document_id),
-                metadata=metadata
-            )
-            timer.stop("chunking_time_ms")
-            
-            # Retrieve chunks
-            timer.start("retrieval_time_ms")
-            retrieved_results = await pipeline.aretrieve(query, top_k=top_k)
-
-            if similarity_threshold is not None and retrieved_results and isinstance(retrieved_results[0], tuple):
-                retrieved_results = [
-                    (chunk, score)
-                    for chunk, score in retrieved_results
-                    if score >= float(similarity_threshold)
-                ]
-            timer.stop("retrieval_time_ms")
-            
-            if retrieved_results and isinstance(retrieved_results[0], tuple):
-                retrieved_chunks = [res[0] for res in retrieved_results]
-            else:
-                retrieved_chunks = retrieved_results or []
-            
-            # Generate answer
-            timer.start("llm_time_ms")
-            answer = ""
-            if pipeline.llm_client and hasattr(pipeline.llm_client, 'llm') and pipeline.llm_client.llm:
+            if doc.file_type.lower() == "pdf":
                 try:
-                    answer = await pipeline.llm_client.generate_async(query, retrieved_chunks)
+                    pages = FileProcessor.extract_pdf_pages(doc.content, doc.filename)
+                    await pipeline.aindex_document_with_pages(
+                        pages=pages,
+                        doc_id=str(document_id),
+                        base_metadata=metadata,
+                    )
                 except Exception as e:
-                    answer = f"LLM generation failed: {str(e)}"
+                    logger.warning("Compare: PDF page indexing failed, falling back: %s", str(e))
+                    fallback_text = FileProcessor.extract_pdf_text_fallback(doc.content, doc.filename)
+
+                    await pipeline.aindex_document(
+                        text=fallback_text,
+                        doc_id=str(document_id),
+                        metadata=metadata
+                    )
             else:
-                answer = f"Answer generated from {len(retrieved_chunks)} retrieved chunks (LLM unavailable)"
-            timer.stop("llm_time_ms")
+                await pipeline.aindex_document(
+                    text=doc.content,
+                    doc_id=str(document_id),
+                    metadata=metadata
+                )
+            timer.stop("chunking_time_ms")
+
+            if query_mode == "global":
+                timer.start("retrieval_time_ms")
+                summary, fallback_results, fallback_chunks = await _summarize_compare_context(
+                    query=query,
+                    config=config,
+                    vectorstore=pipeline.vectorstore._get_vectorstore(pipeline.embedder),
+                    llm=pipeline.llm_client.llm if pipeline.llm_client and getattr(pipeline.llm_client, "llm", None) else None,
+                    user_scope=str(current_user.id),
+                    db=db,
+                )
+                timer.stop("retrieval_time_ms")
+
+                retrieved_results = fallback_results
+                retrieved_chunks = fallback_chunks
+                answer = summary or f"Answer generated from {len(retrieved_chunks)} retrieved chunks (LLM unavailable)"
+                if summary is None and pipeline.llm_client and getattr(pipeline.llm_client, "llm", None):
+                    timer.start("llm_time_ms")
+                    answer = f"Answer generated from {len(retrieved_chunks)} retrieved chunks (LLM unavailable)"
+                    timer.stop("llm_time_ms")
+                else:
+                    timer.start("llm_time_ms")
+                    timer.stop("llm_time_ms")
+                raw_scores = [float(score) for _, score in retrieved_results] if retrieved_results else []
+                avg_similarity = calc_avg_similarity(raw_scores)
+            else:
+                # Retrieve chunks
+                timer.start("retrieval_time_ms")
+                retrieved_results = await pipeline.aretrieve(query, top_k=top_k)
+
+                if similarity_threshold is not None and retrieved_results and isinstance(retrieved_results[0], tuple):
+                    retrieved_results = [
+                        (chunk, score)
+                        for chunk, score in retrieved_results
+                        if score >= float(similarity_threshold)
+                    ]
+                timer.stop("retrieval_time_ms")
+                
+                if retrieved_results and isinstance(retrieved_results[0], tuple):
+                    retrieved_chunks = [res[0] for res in retrieved_results]
+                else:
+                    retrieved_chunks = retrieved_results or []
+                
+                # Generate answer
+                timer.start("llm_time_ms")
+                answer = ""
+                if pipeline.llm_client and hasattr(pipeline.llm_client, 'llm') and pipeline.llm_client.llm:
+                    try:
+                        answer = await pipeline.llm_client.generate_async(query, retrieved_chunks)
+                    except Exception as e:
+                        answer = f"LLM generation failed: {str(e)}"
+                else:
+                    answer = f"Answer generated from {len(retrieved_chunks)} retrieved chunks (LLM unavailable)"
+                timer.stop("llm_time_ms")
             
             # Calculate average similarity
-            avg_similarity = 0.0
-            if retrieved_results and isinstance(retrieved_results[0], tuple):
-                similarities = [res[1] for res in retrieved_results if len(res) > 1]
-                if similarities:
-                    avg_similarity = sum(similarities) / len(similarities)
+            if query_mode != "global":
+                avg_similarity = 0.0
+                if retrieved_results and isinstance(retrieved_results[0], tuple):
+                    similarities = [res[1] for res in retrieved_results if len(res) > 1]
+                    if similarities:
+                        avg_similarity = sum(similarities) / len(similarities)
             
             # Create result entry
             result = {

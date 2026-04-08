@@ -1,9 +1,11 @@
 import os
+import asyncio
 
 from dotenv import load_dotenv
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import declarative_base
+from sqlalchemy.pool import NullPool
 
 # Load environment variables
 load_dotenv()
@@ -36,7 +38,26 @@ def _resolve_database_url() -> str:
 ASYNC_DATABASE_URL = _resolve_database_url()
 
 # Create async SQLAlchemy engine and session factory.
-engine = create_async_engine(ASYNC_DATABASE_URL, future=True)
+_engine_kwargs = {"future": True}
+
+# SQLite + async streaming requests can frequently hit cancelled tasks on
+# disconnect. Using NullPool avoids reusing cancelled/stale connections.
+if ASYNC_DATABASE_URL.startswith("sqlite+aiosqlite"):
+    _engine_kwargs["poolclass"] = NullPool
+    # Streaming request cancellations can interrupt rollback/terminate on close.
+    # Avoid reset-on-return for one-shot SQLite connections to reduce noisy close errors.
+    _engine_kwargs["pool_reset_on_return"] = None
+else:
+    # Production-friendly pooling for PostgreSQL/other server DBs.
+    _engine_kwargs.update(
+        {
+            "pool_size": int(os.getenv("DB_POOL_SIZE", "10")),
+            "max_overflow": int(os.getenv("DB_MAX_OVERFLOW", "20")),
+            "pool_pre_ping": True,
+        }
+    )
+
+engine = create_async_engine(ASYNC_DATABASE_URL, **_engine_kwargs)
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,
     class_=AsyncSession,
@@ -54,4 +75,6 @@ async def get_db():
         try:
             yield db
         finally:
-            await db.close()
+            # Client disconnects can cancel request scope while dependency teardown runs.
+            # Shield close so connection cleanup can complete safely.
+            await asyncio.shield(db.close())

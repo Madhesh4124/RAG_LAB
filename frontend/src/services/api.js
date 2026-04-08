@@ -1,14 +1,7 @@
 import axios from "axios";
 
-const rawEnvBaseUrl = (import.meta.env.VITE_API_URL || "").trim();
-const useSameOrigin = (import.meta.env.VITE_USE_SAME_ORIGIN || "true").toLowerCase() !== "false";
-const hostname = typeof window !== "undefined" ? window.location.hostname : "";
-const isLocalhost = hostname === "localhost" || hostname === "127.0.0.1";
-
-// In deployed frontend (e.g., Vercel), use same-origin API calls via rewrites.
-const resolvedBaseUrl = useSameOrigin && !isLocalhost
-  ? ""
-  : (rawEnvBaseUrl || "http://localhost:8000");
+const rawEnvBaseUrl = (import.meta.env.VITE_API_URL || "http://localhost:8000").trim();
+const resolvedBaseUrl = rawEnvBaseUrl;
 
 export const BASE_URL = resolvedBaseUrl.replace(/\/+$/, "");
 export const api = axios.create({ baseURL: BASE_URL, withCredentials: true });
@@ -35,6 +28,7 @@ export const getChunks = (docId, configId) =>
 export const listDocuments = (params = {}) => api.get("/api/documents/list", { params });
 export const searchDocuments = (query, limit = 50) =>
   api.get("/api/documents/search", { params: { query, limit } });
+export const deleteDocument = (docId) => api.delete(`/api/documents/${docId}`);
 
 // ── Config ──────────────────────────────────────────────────────
 export const saveConfig  = (cfg)      => api.post("/api/config", cfg);

@@ -14,11 +14,12 @@ load_dotenv(override=True)
 
 @lru_cache(maxsize=8)
 def _build_llm(model_name: str, temperature: float, api_key: str) -> ChatGoogleGenerativeAI:
+    max_output_tokens = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "1024"))
     return ChatGoogleGenerativeAI(
         model=model_name,
         temperature=temperature,
         google_api_key=api_key,
-        max_output_tokens=512,
+        max_output_tokens=max_output_tokens,
     )
 
 

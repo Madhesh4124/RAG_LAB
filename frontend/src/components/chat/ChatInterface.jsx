@@ -1,5 +1,5 @@
 import React from 'react';
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import MessageList from "./MessageList";
 import InputBox from "./InputBox";
 import { BASE_URL } from "../../services/api";
@@ -7,6 +7,49 @@ import { BASE_URL } from "../../services/api";
 export default function ChatInterface({ docId, docIds = [], configId }) {
   const [messages, setMessages] = useState([]);
   const [loading,  setLoading]  = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const hydrateHistory = async () => {
+      if (!docId) {
+        setMessages([]);
+        return;
+      }
+
+      try {
+        const response = await fetch(`${BASE_URL}/api/chat/history/${docId}`, {
+          method: "GET",
+          credentials: "include",
+        });
+        if (!response.ok) return;
+
+        const rows = await response.json();
+        if (cancelled || !Array.isArray(rows)) return;
+
+        const filtered = configId
+          ? rows.filter((item) => String(item.config_id) === String(configId))
+          : rows;
+
+        const hydrated = filtered.map((item) => ({
+          role: item.role,
+          content: item.content || "",
+          chunks: Array.isArray(item.retrieved_chunks) ? item.retrieved_chunks : [],
+          timings: null,
+          status: "",
+        }));
+
+        setMessages(hydrated);
+      } catch (e) {
+        console.error("Failed to restore chat history", e);
+      }
+    };
+
+    void hydrateHistory();
+    return () => {
+      cancelled = true;
+    };
+  }, [docId, configId]);
 
   const handleSend = async (query) => {
     setMessages((prev) => [...prev, { role: "user", content: query }]);
@@ -39,15 +82,25 @@ export default function ChatInterface({ docId, docIds = [], configId }) {
         buffer = lines.pop();
 
         for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data:")) continue;
           try {
-            const data = JSON.parse(line.slice(6));
+            const data = JSON.parse(trimmed.slice(5).trim());
             if (data.type === "status") {
               assistantMsg = { ...assistantMsg, status: data.message };
             } else if (data.type === "metadata") {
               assistantMsg = { ...assistantMsg, chunks: data.chunks, status: "" };
             } else if (data.type === "token") {
               assistantMsg = { ...assistantMsg, content: assistantMsg.content + data.content, status: "" };
+            } else if (data.type === "error") {
+              const details = data.message || "Unknown stream error";
+              assistantMsg = {
+                ...assistantMsg,
+                content: `${assistantMsg.content}\n\n[Stream error] ${details}`.trim(),
+                status: "",
+              };
+              streamDone = true;
+              setLoading(false);
             } else if (data.type === "done") {
               assistantMsg = { ...assistantMsg, status: "" };
               streamDone = true;
@@ -75,14 +128,25 @@ export default function ChatInterface({ docId, docIds = [], configId }) {
 
       if (!streamDone && buffer.trim()) {
         const finalLine = buffer.trim();
-        if (finalLine.startsWith("data: ")) {
+        if (finalLine.startsWith("data:")) {
           try {
-            const data = JSON.parse(finalLine.slice(6));
+            const data = JSON.parse(finalLine.slice(5).trim());
             if (data.type === "done") {
               assistantMsg = { ...assistantMsg, status: "" };
               setMessages((prev) => {
                 const next = [...prev];
                 next[next.length - 1] = { ...assistantMsg };
+                return next;
+              });
+            } else if (data.type === "error") {
+              const details = data.message || "Unknown stream error";
+              setMessages((prev) => {
+                const next = [...prev];
+                next[next.length - 1] = {
+                  ...next[next.length - 1],
+                  content: `${next[next.length - 1].content}\n\n[Stream error] ${details}`.trim(),
+                  status: "",
+                };
                 return next;
               });
             }

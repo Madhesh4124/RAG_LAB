@@ -1,6 +1,4 @@
-import asyncio
-
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status, BackgroundTasks
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -69,6 +67,7 @@ async def me(current_user: User = Depends(get_current_user)):
 @router.post("/password-reset/request", status_code=status.HTTP_200_OK)
 async def request_password_reset(
     payload: PasswordResetRequestBody,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
     """Request a password reset email. Always returns success for security."""
@@ -77,7 +76,7 @@ async def request_password_reset(
 
     if user:
         reset_token = create_password_reset_token(user.id)
-        await asyncio.to_thread(email_service.send_password_reset_email, user.email, reset_token)
+        background_tasks.add_task(email_service.send_password_reset_email, user.email, reset_token)
 
     # Always return success to prevent email enumeration attacks
     return PasswordResetResponse(

@@ -13,6 +13,16 @@ from app.database import get_db
 from app.models.rate_limit import RateLimitEvent
 
 
+class RateLimitExceededException(Exception):
+    """Raised when a request exceeds configured rate limits."""
+
+    def __init__(self, scope_key: str, call_type: str, message: str):
+        super().__init__(message)
+        self.scope_key = scope_key
+        self.call_type = call_type
+        self.message = message
+
+
 class DatabaseRateLimiter:
     """Track and enforce rate limits using shared database state.
 
@@ -97,6 +107,16 @@ class DatabaseRateLimiter:
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "error": error_message,
         }
+
+    async def enforce_rate_limit(self, scope_key: str, call_type: str = "llm") -> None:
+        """Raise a typed exception when the current scope is over limit."""
+        allowed, _, error_msg = await self.check_rate_limit(scope_key, call_type)
+        if not allowed:
+            raise RateLimitExceededException(
+                scope_key=scope_key,
+                call_type=call_type,
+                message=error_msg,
+            )
 
 
 async def get_rate_limiter(db: AsyncSession = Depends(get_db)) -> DatabaseRateLimiter:

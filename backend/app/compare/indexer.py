@@ -41,7 +41,11 @@ def _chunk_count(vectorstore) -> int:
         return 0
 
 
-async def index_config(config: RAGConfig, document_text: str, user_scope: str | None = None) -> IndexResponse:
+async def index_config(
+    config: RAGConfig,
+    document_text: str,
+    user_scope: str | None = None,
+) -> IndexResponse:
     collection_name = config.collection_name
 
     if collection_exists(

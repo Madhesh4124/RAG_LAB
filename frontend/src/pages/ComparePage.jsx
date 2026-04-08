@@ -263,16 +263,15 @@ export default function ComparePage() {
     setIsRunningStaged(true);
     setResults(null);
     try {
-      const statuses = [];
-      for (const staged of stagedConfigs) {
-        const current = getConfigByName(staged.name) || staged;
-        if (!readyStatuses.has(current.indexingStatus)) {
-          const status = await indexConfig(current);
-          statuses.push(status);
-        } else {
-          statuses.push(current.indexingStatus);
-        }
-      }
+      const statuses = await Promise.all(
+        stagedConfigs.map(async (staged) => {
+          const current = getConfigByName(staged.name) || staged;
+          if (!readyStatuses.has(current.indexingStatus)) {
+            return await indexConfig(current);
+          }
+          return current.indexingStatus;
+        })
+      );
 
       const hasErrors = statuses.some((status) => status === "error" || !status);
 

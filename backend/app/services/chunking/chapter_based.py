@@ -5,6 +5,7 @@ Splits text at detected chapter or section headings so that each
 chapter / section becomes its own chunk.
 """
 
+import copy
 import logging
 import re
 import uuid
@@ -23,7 +24,7 @@ from app.services.chunking.fixed_size import FixedSizeChunker
 _DEFAULT_HEADING_PATTERNS: List[str] = [
     r"^chapter\s+[\divxlcdm]+\b.*",            # Chapter 1, Chapter IV
     r"^chapter\s+\w+.*",                        # Chapter One
-    r"^#{1,6}\s+\S.*",                          # Markdown headings
+    r"^#{1,6}\s*\S.*",                          # Markdown headings (allow missing space e.g. ##Title)
     r"^part\s+[\divxlcdm]+\b.*",                # PART 1, PART IV
     r"^part\s+\w+.*",                           # PART ONE
     r"^section\s+[\d]+(?:\.\d+)*\b.*",          # Section 1, Section 1.2
@@ -153,13 +154,16 @@ class ChapterChunker(BaseChunker):
         heading: Optional[str],
         heading_level: Optional[int],
         section_index: int,
+        start_line: Optional[int] = None,
     ) -> Dict[str, Any]:
-        md = base_metadata.copy()
+        md = copy.deepcopy(base_metadata)
         if heading:
             md["heading"] = heading
         if heading_level is not None:
             md["heading_level"] = heading_level
         md["section_index"] = section_index
+        if start_line is not None:
+            md["start_line_number"] = start_line
         return md
 
     def _emit_chunk(
@@ -187,12 +191,12 @@ class ChapterChunker(BaseChunker):
     ) -> List[Chunk]:
         """Split oversized chapter chunks while preserving offsets."""
         if not self.max_chunk_size or self.length_fn(chunk_text) <= self.max_chunk_size:
-            single = self._emit_chunk(chunk_text, start_char, metadata.copy())
+            single = self._emit_chunk(chunk_text, start_char, copy.deepcopy(metadata))
             return [single] if single else []
 
         lines: List[str] = chunk_text.splitlines(keepends=True)
         if not lines:
-            single = self._emit_chunk(chunk_text, start_char, metadata.copy())
+            single = self._emit_chunk(chunk_text, start_char, copy.deepcopy(metadata))
             return [single] if single else []
 
         chunks: List[Chunk] = []
@@ -213,7 +217,7 @@ class ChapterChunker(BaseChunker):
                 # Force progress for single very-long lines.
                 if not current_lines and self.length_fn(line) > self.max_chunk_size:
                     piece = line[: self.max_chunk_size]
-                    chunk = self._emit_chunk(piece, rolling_start, metadata.copy())
+                    chunk = self._emit_chunk(piece, rolling_start, copy.deepcopy(metadata))
                     if chunk:
                         chunks.append(chunk)
                     lines[j] = line[self.max_chunk_size :]
@@ -226,7 +230,7 @@ class ChapterChunker(BaseChunker):
 
             if current_lines:
                 text_part = "".join(current_lines)
-                chunk = self._emit_chunk(text_part, rolling_start, metadata.copy())
+                chunk = self._emit_chunk(text_part, rolling_start, copy.deepcopy(metadata))
                 if chunk:
                     chunks.append(chunk)
 
@@ -257,7 +261,8 @@ class ChapterChunker(BaseChunker):
 
         section_text = "".join(line for line, _, _ in current_lines)
         section_start = current_lines[0][1]
-        md = self._build_metadata(metadata, heading, heading_level, section_index)
+        start_line_num = current_lines[0][3] if len(current_lines[0]) > 3 else None
+        md = self._build_metadata(metadata, heading, heading_level, section_index, start_line_num)
 
         produced = self._split_large_chunk(section_text, section_start, md)
         if produced:
@@ -315,12 +320,13 @@ class ChapterChunker(BaseChunker):
         lines = text.splitlines(keepends=True)
         chunks: List[Chunk] = []
 
-        current_lines: List[Tuple[str, int, int]] = []
+        current_lines: List[Tuple[str, int, int, int]] = []
         current_heading: Optional[str] = None
         current_heading_level: Optional[int] = None
         section_index = 0
         char_offset: int = 0
         headings_found = 0
+        line_num = 1
 
         for line in lines:
             line_start = char_offset
@@ -346,8 +352,9 @@ class ChapterChunker(BaseChunker):
                     f"Detected heading: {current_heading!r} level={current_heading_level} at {line_start}"
                 )
 
-            current_lines.append((line, line_start, line_end))
+            current_lines.append((line, line_start, line_end, line_num))
             char_offset += len(line)
+            line_num += 1
 
         # Flush any remaining text.
         if current_lines:

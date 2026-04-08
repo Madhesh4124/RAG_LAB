@@ -1,4 +1,6 @@
+import copy
 import logging
+import os
 import re
 from typing import Any, Callable, Dict, List, Optional
 from app.services.chunking.base import BaseChunker, Chunk
@@ -75,7 +77,7 @@ class RecursiveChunker(BaseChunker):
         self.separators = separators if separators is not None else _DEFAULT_SEPARATORS
         self.min_chunk_size = min_chunk_size
         self.apply_overlap_recursively = apply_overlap_recursively
-        self.max_recursion_depth = max_recursion_depth
+        self.max_recursion_depth = int(os.getenv("MAX_RECURSIVE_DEPTH", str(max_recursion_depth)))
         self.length_fn = length_function
         self.debug = debug
 
@@ -140,7 +142,7 @@ class RecursiveChunker(BaseChunker):
             if not rc["text"] or not rc["text"].strip():
                 continue
 
-            chunk_metadata = metadata.copy()
+            chunk_metadata = copy.deepcopy(metadata)
             chunk_metadata["split_type"] = "recursive"
             chunk_metadata["separator_used"] = rc.get("separator_used")
             chunk_metadata["recursion_depth"] = rc.get("depth", 0)
@@ -173,6 +175,12 @@ class RecursiveChunker(BaseChunker):
             or text_len <= self.min_chunk_size
             or depth >= self.max_recursion_depth
         ):
+            if depth >= self.max_recursion_depth and text_len > self.chunk_size:
+                logger.warning(
+                    "[RecursiveChunker] Max recursion depth (%d) reached. Emitting chunk > chunk_size "
+                    "(len=%d, max=%d).",
+                    self.max_recursion_depth, text_len, self.chunk_size
+                )
             if text:
                 return [{
                     "text": text,

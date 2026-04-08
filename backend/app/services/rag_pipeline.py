@@ -51,7 +51,7 @@ class RAGPipeline:
     def index_document(self, text: str, doc_id: str, metadata: dict) -> None:
         """Processes a document and indexes it into the vector store.
         """
-        self.timer.reset()
+        timer = PipelineTimer()
         
         enriched_metadata = metadata.copy() if metadata else {}
         enriched_metadata["doc_id"] = doc_id
@@ -59,29 +59,147 @@ class RAGPipeline:
             text.encode("utf-8")
         ).hexdigest()
 
+        # Check if the vectorstore already has it
+        is_indexed = False
         if hasattr(self.vectorstore, "is_document_indexed"):
             is_indexed = self.vectorstore.is_document_indexed(
                 doc_id=doc_id,
                 content_hash=enriched_metadata["content_hash"],
             )
-            if is_indexed:
-                return
+
+        # Check if we have an in-memory retriever (like BM25) that lost its chunks due to server restart
+        retriever_needs_index = False
+        if hasattr(self.retriever, "index"):
+            if hasattr(self.retriever, "chunks") and not self.retriever.chunks:
+                retriever_needs_index = True
+            elif hasattr(self.retriever, "sparse_retriever") and hasattr(self.retriever.sparse_retriever, "chunks") and not getattr(self.retriever.sparse_retriever, "chunks"):
+                retriever_needs_index = True
+
+        if is_indexed and not retriever_needs_index:
+            return
 
         # 1. Chunk the document (Timed)
-        self.timer.start("chunking_time_ms")
+        timer.start("chunking_time_ms")
         chunks = self.chunker.chunk(text=text, metadata=enriched_metadata)
-        self.timer.stop("chunking_time_ms")
+        timer.stop("chunking_time_ms")
 
         if hasattr(self.retriever, "index"):
             self.retriever.index(chunks)
 
         # 2. Embed and store the chunks (Timed)
-        self.timer.start("embedding_time_ms")
-        self.vectorstore.add_chunks(chunks=chunks, embedder=self.embedder)
-        self.timer.stop("embedding_time_ms")
+        if not is_indexed:
+            timer.start("embedding_time_ms")
+            self.vectorstore.add_chunks(chunks=chunks, embedder=self.embedder)
+            timer.stop("embedding_time_ms")
+
+        self.timer = timer
 
     async def aindex_document(self, text: str, doc_id: str, metadata: dict) -> None:
         await asyncio.to_thread(self.index_document, text, doc_id, metadata)
+
+    def index_document_with_pages(
+        self, 
+        pages: List[Dict[str, Any]], 
+        doc_id: str,
+        base_metadata: Dict[str, Any]
+    ) -> None:
+        """Index a document by chunking each page independently.
+        
+        Preserves page-level structure and metadata in chunks.
+        
+        Args:
+            pages: List of dicts, each containing 'text' and 'metadata' keys.
+            doc_id: Document identifier.
+            base_metadata: Base metadata to include in all chunks.
+        """
+        timer = PipelineTimer()
+
+        is_indexed = False
+        if hasattr(self.vectorstore, "is_document_indexed"):
+            # Check if at least some pages are already indexed. 
+            if pages and self.vectorstore.is_document_indexed(doc_id=doc_id):
+                is_indexed = True
+
+        retriever_needs_index = False
+        if hasattr(self.retriever, "index"):
+            if hasattr(self.retriever, "chunks") and not self.retriever.chunks:
+                retriever_needs_index = True
+            elif hasattr(self.retriever, "sparse_retriever") and hasattr(self.retriever.sparse_retriever, "chunks") and not getattr(self.retriever.sparse_retriever, "chunks"):
+                retriever_needs_index = True
+
+        if is_indexed and not retriever_needs_index:
+            return
+        
+        all_chunks = []
+        total_pages = len(pages)
+        
+        # Process each page independently
+        for page_idx, page_dict in enumerate(pages):
+            page_text = page_dict.get("text", "")
+            page_metadata = page_dict.get("metadata", {})
+            
+            if not page_text.strip():
+                continue
+            
+            # Create enriched metadata for this page
+            enriched_metadata = base_metadata.copy() if base_metadata else {}
+            enriched_metadata["doc_id"] = doc_id
+            enriched_metadata.update(page_metadata)  # Include page-specific metadata
+            enriched_metadata["content_hash"] = hashlib.sha256(
+                page_text.encode("utf-8")
+            ).hexdigest()
+            
+            # Chunk this page independently
+            timer.start("chunking_time_ms")
+            page_chunks = self.chunker.chunk(text=page_text, metadata=enriched_metadata)
+            timer.stop("chunking_time_ms")
+            
+            # Add chunk_index to each page's chunks for sequential identification
+            for chunk_idx, chunk in enumerate(page_chunks):
+                if chunk.metadata is None:
+                    chunk.metadata = {}
+                chunk.metadata["chunk_index"] = chunk_idx
+            
+            all_chunks.extend(page_chunks)
+        
+        if not all_chunks:
+            return
+        
+        # Index all chunks
+        if hasattr(self.retriever, "index"):
+            self.retriever.index(all_chunks)
+        
+        # Embed and store
+        if not is_indexed:
+            timer.start("embedding_time_ms")
+            self.vectorstore.add_chunks(chunks=all_chunks, embedder=self.embedder)
+            timer.stop("embedding_time_ms")
+
+        self.timer = timer
+        
+        # Log success
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(
+            "Indexed document %s: %d pages, %d total chunks",
+            doc_id,
+            total_pages,
+            len(all_chunks),
+        )
+
+    async def aindex_document_with_pages(
+        self,
+        pages: List[Dict[str, Any]],
+        doc_id: str,
+        base_metadata: Dict[str, Any]
+    ) -> None:
+        """Async version of index_document_with_pages."""
+        await asyncio.to_thread(
+            self.index_document_with_pages,
+            pages,
+            doc_id,
+            base_metadata,
+        )
 
     def retrieve(self, query: str, top_k: int = 5) -> List[Tuple[Chunk, float]]:
         """Retrieves chunks similar to the query.
@@ -170,8 +288,14 @@ class RAGPipeline:
                 yield chunk_text
             return
 
-        for chunk_text in await asyncio.to_thread(lambda: list(self.generate_stream(query, chunks, llm_client))):
+        # Fallback for synchronous generators: wrap the iterator itself properly.
+        # We use a decorator or a helper to make it semi-async.
+        def _get_iter():
+            return self.generate_stream(query, chunks, llm_client)
+
+        for chunk_text in await asyncio.to_thread(_get_iter):
             yield chunk_text
+            await asyncio.sleep(0) # Yield control
         
     def get_last_timings(self) -> Dict[str, float]:
         """Returns the PipelineTimer's latest metrics dict spanning strictly active pipeline schema domains natively."""

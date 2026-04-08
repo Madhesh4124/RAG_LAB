@@ -8,6 +8,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from chromadb import PersistentClient
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
@@ -22,8 +23,8 @@ def _load_chroma_class():
 Chroma = _load_chroma_class()
 
 from app.services.embedding.huggingface_api_embedder import HuggingFaceAPIEmbedder
-from app.services.embedding.google_embedder import GoogleEmbedder
 from app.services.embedding.nvidia_embedder import NvidiaEmbedder
+from app.compare.summary_registry import clear_summary_registry
 
 def _resolve_persist_dir() -> Path:
     candidates = [
@@ -57,6 +58,8 @@ def _resolve_persist_dir() -> Path:
 _PERSIST_DIR = _resolve_persist_dir()
 _EMBEDDER_CACHE: dict[tuple[str, str], "_EmbeddingAdapter"] = {}
 _EMBEDDER_CACHE_LOCK = threading.Lock()
+_CLIENT_CACHE: dict[str, Any] = {}
+_CLIENT_CACHE_LOCK = threading.Lock()
 
 
 def _scoped_collection_name(collection_name: str, user_scope: str | None = None) -> str:
@@ -104,15 +107,25 @@ def _load_embedder(embedding_provider: str, embedding_model: str):
             embedder = _EmbeddingAdapter(HuggingFaceEmbeddings(model_name=model_name))
         except Exception:
             embedder = _EmbeddingAdapter(HuggingFaceAPIEmbedder(model=model_name))
-    elif embedding_provider == "google":
-        model_name = embedding_model or "models/gemini-embedding-2-preview"
-        embedder = _EmbeddingAdapter(GoogleEmbedder(model=model_name))
     else:
         raise ValueError(f"Unsupported embedding provider: {embedding_provider}")
 
     with _EMBEDDER_CACHE_LOCK:
         _EMBEDDER_CACHE.setdefault(cache_key, embedder)
         return _EMBEDDER_CACHE[cache_key]
+
+
+def _get_cached_client(persist_dir: Path):
+    cache_key = str(persist_dir.resolve())
+    with _CLIENT_CACHE_LOCK:
+        cached = _CLIENT_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    client = PersistentClient(path=cache_key)
+    with _CLIENT_CACHE_LOCK:
+        _CLIENT_CACHE.setdefault(cache_key, client)
+        return _CLIENT_CACHE[cache_key]
 
 
 def get_or_load_collection(
@@ -126,7 +139,7 @@ def get_or_load_collection(
     return Chroma(
         collection_name=scoped_collection_name,
         embedding_function=embedder,
-        persist_directory=str(_PERSIST_DIR),
+        client=_get_cached_client(_PERSIST_DIR),
     )
 
 
@@ -146,11 +159,14 @@ def collection_exists(
 def clear_collection_registry() -> None:
     with _EMBEDDER_CACHE_LOCK:
         _EMBEDDER_CACHE.clear()
+    with _CLIENT_CACHE_LOCK:
+        _CLIENT_CACHE.clear()
     return None
 
 
 def clear_compare_chroma_store() -> None:
     clear_collection_registry()
+    clear_summary_registry()
     if _PERSIST_DIR.exists():
         shutil.rmtree(_PERSIST_DIR, ignore_errors=True)
     _PERSIST_DIR.mkdir(parents=True, exist_ok=True)

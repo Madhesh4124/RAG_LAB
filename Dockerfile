@@ -32,7 +32,7 @@ WORKDIR /app
 # Copy only the virtualenv and application source — no build tools.
 COPY --from=builder /opt/venv /opt/venv
 COPY backend /app/backend
-COPY start.sh /app/backend/start.sh
+COPY backend/start.sh /app/backend/start.sh
 RUN chmod +x /app/backend/start.sh
 
 WORKDIR /app/backend

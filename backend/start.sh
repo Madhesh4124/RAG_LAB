@@ -1,22 +1,46 @@
 #!/bin/sh
 set -e
 
-# Resolve a writable persist directory for SQLite/Chroma files.
+# ---------------------------------------------------------------------------
+# Resolve a writable persist directory for SQLite + Chroma files.
+#
+# Priority:
+#   1. CHROMA_PERSIST_DIR env-var (explicit override)
+#   2. /data              (HF Spaces persistent storage root)
+#   3. /data/chroma_data  (legacy subdir — may not be mkdir-able)
+#   4. /app/backend/chroma_data (ephemeral fallback, wiped on restart)
+# ---------------------------------------------------------------------------
 FALLBACK_DB_DIR="/app/backend/chroma_data"
-DB_DIR="${CHROMA_PERSIST_DIR:-$FALLBACK_DB_DIR}"
 
-mkdir -p "$DB_DIR" || true
+_try_dir() {
+  # Returns 0 (success) if the directory exists and is writable, or can be
+  # created and written to. Returns 1 otherwise.
+  _d="$1"
+  mkdir -p "$_d" 2>/dev/null || true
+  [ -d "$_d" ] && [ -w "$_d" ]
+}
 
-# On HF Spaces mounted volumes (for example /data), chown can be forbidden.
-# Only try it as root, and never fail startup if ownership cannot be changed.
-if [ "$(id -u)" -eq 0 ]; then
-  chown -R appuser:appgroup "$DB_DIR" || echo "[WARN] Could not chown $DB_DIR, continuing"
+if [ -n "${CHROMA_PERSIST_DIR:-}" ]; then
+  DB_DIR="$CHROMA_PERSIST_DIR"
+  _try_dir "$DB_DIR" || {
+    echo "[WARN] CHROMA_PERSIST_DIR=$DB_DIR is not writable. Trying /data..."
+    DB_DIR=""
+  }
 fi
 
-if [ ! -w "$DB_DIR" ]; then
-  echo "[WARN] $DB_DIR is not writable by uid $(id -u). Falling back to $FALLBACK_DB_DIR"
-  DB_DIR="$FALLBACK_DB_DIR"
-  mkdir -p "$DB_DIR"
+if [ -z "${DB_DIR:-}" ]; then
+  # Try /data first (HF Spaces persistent root — no subdir creation needed)
+  if _try_dir "/data"; then
+    DB_DIR="/data"
+    echo "[INFO] Using /data as persist directory"
+  elif _try_dir "/data/chroma_data"; then
+    DB_DIR="/data/chroma_data"
+    echo "[INFO] Using /data/chroma_data as persist directory"
+  else
+    echo "[WARN] /data is not writable by uid $(id -u). Falling back to $FALLBACK_DB_DIR"
+    DB_DIR="$FALLBACK_DB_DIR"
+    mkdir -p "$DB_DIR"
+  fi
 fi
 
 export CHROMA_PERSIST_DIR="$DB_DIR"
@@ -33,16 +57,16 @@ case "${DATABASE_URL:-}" in
 esac
 
 # Resolve a writable directory for file uploads.
+# Co-locate with the DB dir so uploads survive in the same persistent area.
 FALLBACK_UPLOAD_DIR="/app/backend/uploads"
-UPLOAD_CANDIDATE="${UPLOAD_DIR:-/data/uploads}"
 
-mkdir -p "$UPLOAD_CANDIDATE" 2>/dev/null || true
-
-if [ "$(id -u)" -eq 0 ]; then
-  chown -R appuser:appgroup "$UPLOAD_CANDIDATE" || echo "[WARN] Could not chown $UPLOAD_CANDIDATE, continuing"
+if [ -n "${UPLOAD_DIR:-}" ]; then
+  UPLOAD_CANDIDATE="$UPLOAD_DIR"
+else
+  UPLOAD_CANDIDATE="$DB_DIR/uploads"
 fi
 
-if [ ! -w "$UPLOAD_CANDIDATE" ]; then
+if ! _try_dir "$UPLOAD_CANDIDATE"; then
   echo "[WARN] $UPLOAD_CANDIDATE is not writable by uid $(id -u). Falling back to $FALLBACK_UPLOAD_DIR"
   UPLOAD_CANDIDATE="$FALLBACK_UPLOAD_DIR"
   mkdir -p "$UPLOAD_CANDIDATE"

@@ -235,7 +235,61 @@ async def clear_root(
                 # If filesystem removal is blocked by locks, keep folder but collections
                 # are already deleted through Chroma API.
                 pass
-        target_root.mkdir(parents=True, exist_ok=True)
-        deleted.append(str(target_root))
-
     return ChromaDeleteResponse(status="success", deleted=deleted)
+
+
+@router.get("/db-status")
+async def db_status(current_user: User = Depends(require_admin)):
+    """Diagnostic endpoint: shows storage paths, document counts, and current user's documents.
+
+    Helps diagnose 'documents invisible after upload' issues caused by storage
+    path mismatches or DB isolation problems.
+    """
+    from sqlalchemy import func, select, text
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from app.database import AsyncSessionLocal
+    from app.models.document import Document
+    from app.models.user import User as UserModel
+
+    async with AsyncSessionLocal() as db:
+        # Total documents in DB
+        total_docs = (await db.execute(select(func.count()).select_from(Document))).scalar()
+
+        # Documents per user
+        per_user_rows = (await db.execute(
+            select(Document.user_id, func.count(Document.id).label("count"))
+            .group_by(Document.user_id)
+        )).all()
+        per_user = [{"user_id": str(r[0]), "count": r[1]} for r in per_user_rows]
+
+        # Current user's documents (most recent 10)
+        my_docs_rows = (await db.execute(
+            select(Document.id, Document.filename, Document.file_type, Document.upload_date)
+            .where(Document.user_id == current_user.id)
+            .order_by(Document.upload_date.desc())
+            .limit(10)
+        )).all()
+        my_docs = [
+            {"id": str(r[0]), "filename": r[1], "file_type": r[2], "upload_date": str(r[3])}
+            for r in my_docs_rows
+        ]
+
+        # All users
+        all_users = (await db.execute(select(UserModel.id, UserModel.username))).all()
+        users = [{"id": str(r[0]), "username": r[1]} for r in all_users]
+
+    return {
+        "storage": {
+            "chroma_persist_dir": os.getenv("CHROMA_PERSIST_DIR", "(not set)"),
+            "upload_dir": os.getenv("UPLOAD_DIR", "(not set)"),
+            "database_url": os.getenv("DATABASE_URL", "(not set)"),
+        },
+        "current_user": {
+            "id": str(current_user.id),
+            "username": current_user.username,
+        },
+        "all_users": users,
+        "total_documents": total_docs,
+        "documents_per_user": per_user,
+        "my_recent_documents": my_docs,
+    }

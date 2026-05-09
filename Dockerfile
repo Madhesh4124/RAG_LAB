@@ -37,7 +37,7 @@ WORKDIR /app/backend
 
 # P4.2: Run as a non-root user for security.
 RUN addgroup --gid 1001 appgroup \
- && adduser --uid 1001 --gid 1001 --disabled-password --no-create-home appuser \
+ && adduser --uid 1001 --gid 1001 --disabled-password --no-create-home --gecos "" appuser \
  && chown -R appuser:appgroup /app
 
 USER appuser

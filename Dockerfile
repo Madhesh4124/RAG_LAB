@@ -32,6 +32,8 @@ WORKDIR /app
 # Copy only the virtualenv and application source — no build tools.
 COPY --from=builder /opt/venv /opt/venv
 COPY backend /app/backend
+COPY start.sh /app/backend/start.sh
+RUN chmod +x /app/backend/start.sh
 
 WORKDIR /app/backend
 
@@ -42,5 +44,8 @@ RUN addgroup --gid 1001 appgroup \
 
 USER appuser
 
-# Hugging Face Spaces Docker runtime exposes PORT (default 7860).
-CMD ["sh", "-c", "gunicorn app.main:app -k uvicorn.workers.UvicornWorker -w ${WEB_CONCURRENCY:-4} --bind 0.0.0.0:${PORT:-7860} --timeout ${GUNICORN_TIMEOUT:-120} --log-level ${LOG_LEVEL:-info} --access-logfile - --error-logfile - --capture-output"]
+# Ensure the app uses an on-disk DB location under /app so it's writable.
+ENV CHROMA_PERSIST_DIR=/app/backend
+
+# Use start script to prepare DB, run migrations, then start Gunicorn.
+CMD ["/app/backend/start.sh"]

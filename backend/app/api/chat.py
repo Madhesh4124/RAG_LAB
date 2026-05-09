@@ -331,7 +331,6 @@ async def chat_endpoint(
     cfg_stmt = select(RAGConfig).where(
         RAGConfig.id == config_id,
         RAGConfig.user_id == current_user.id,
-        RAGConfig.document_id == doc_id,
     )
     doc = (await db.execute(doc_stmt)).scalars().first()
     config = (await db.execute(cfg_stmt)).scalars().first()
@@ -584,13 +583,12 @@ async def chat_stream_endpoint(
     cfg_stmt = select(RAGConfig).where(
         RAGConfig.id == config_id,
         RAGConfig.user_id == current_user.id,
-        RAGConfig.document_id == doc_id,
     )
     async with AsyncSessionLocal() as read_db:
         docs = (await read_db.execute(doc_stmt)).scalars().all()
         config = (await read_db.execute(cfg_stmt)).scalars().first()
     
-    if not docs or len(docs) != len(normalized_ids) or not config:
+    if not docs or not config:
         raise HTTPException(status_code=404, detail="Resource not found")
 
     logger.info(

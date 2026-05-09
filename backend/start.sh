@@ -2,8 +2,18 @@
 set -e
 
 # Ensure the DB directory exists and is writable by the app user
-mkdir -p "${CHROMA_PERSIST_DIR:-/app/backend}"
-chown -R appuser:appgroup "${CHROMA_PERSIST_DIR:-/app/backend}"
+DB_DIR="${CHROMA_PERSIST_DIR:-/app/backend}"
+mkdir -p "$DB_DIR"
+
+# On HF Spaces mounted volumes (for example /data), chown can be forbidden.
+# Only try it as root, and never fail startup if ownership cannot be changed.
+if [ "$(id -u)" -eq 0 ]; then
+  chown -R appuser:appgroup "$DB_DIR" || echo "[WARN] Could not chown $DB_DIR, continuing"
+fi
+
+if [ ! -w "$DB_DIR" ]; then
+  echo "[WARN] $DB_DIR is not writable by uid $(id -u). Startup may fail if SQLite writes are needed."
+fi
 
 # Run Alembic migrations (async-enabled env.py handles aiosqlite)
 alembic upgrade head

@@ -32,6 +32,24 @@ case "${DATABASE_URL:-}" in
     ;;
 esac
 
+# Resolve a writable directory for file uploads.
+FALLBACK_UPLOAD_DIR="/app/backend/uploads"
+UPLOAD_CANDIDATE="${UPLOAD_DIR:-/data/uploads}"
+
+mkdir -p "$UPLOAD_CANDIDATE" 2>/dev/null || true
+
+if [ "$(id -u)" -eq 0 ]; then
+  chown -R appuser:appgroup "$UPLOAD_CANDIDATE" || echo "[WARN] Could not chown $UPLOAD_CANDIDATE, continuing"
+fi
+
+if [ ! -w "$UPLOAD_CANDIDATE" ]; then
+  echo "[WARN] $UPLOAD_CANDIDATE is not writable by uid $(id -u). Falling back to $FALLBACK_UPLOAD_DIR"
+  UPLOAD_CANDIDATE="$FALLBACK_UPLOAD_DIR"
+  mkdir -p "$UPLOAD_CANDIDATE"
+fi
+
+export UPLOAD_DIR="$UPLOAD_CANDIDATE"
+
 # Run Alembic migrations (async-enabled env.py handles aiosqlite)
 alembic upgrade head
 

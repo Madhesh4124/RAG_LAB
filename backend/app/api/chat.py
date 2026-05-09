@@ -252,13 +252,12 @@ async def prepare_chat_session(
     cfg_stmt = select(RAGConfig).where(
         RAGConfig.id == payload.config_id,
         RAGConfig.user_id == current_user.id,
-        RAGConfig.document_id == payload.document_id,
     )
 
     docs = (await db.execute(doc_stmt)).scalars().all()
     config = (await db.execute(cfg_stmt)).scalars().first()
 
-    if not docs or len(docs) != len(normalized_doc_ids):
+    if not docs:
         raise HTTPException(status_code=404, detail="Document not found")
     if not config:
         raise HTTPException(status_code=404, detail="Config not found")

@@ -53,7 +53,20 @@ export UPLOAD_DIR="$UPLOAD_CANDIDATE"
 # Run Alembic migrations (async-enabled env.py handles aiosqlite)
 alembic upgrade head
 
+# SQLite cannot safely serve multiple Gunicorn workers — concurrent WAL readers
+# across separate process connections cause stale-read 404s and write conflicts.
+# Cap at 1 worker for SQLite; honour WEB_CONCURRENCY only for PostgreSQL.
+case "${DATABASE_URL:-}" in
+  sqlite://*|sqlite+aiosqlite://*)
+    EFFECTIVE_WORKERS=1
+    echo "[INFO] SQLite detected — capping Gunicorn workers to 1 to prevent WAL race conditions"
+    ;;
+  *)
+    EFFECTIVE_WORKERS="${WEB_CONCURRENCY:-4}"
+    ;;
+esac
+
 # Exec Gunicorn
-exec gunicorn app.main:app -k uvicorn.workers.UvicornWorker -w ${WEB_CONCURRENCY:-4} \
+exec gunicorn app.main:app -k uvicorn.workers.UvicornWorker -w "$EFFECTIVE_WORKERS" \
   --bind 0.0.0.0:${PORT:-7860} --timeout ${GUNICORN_TIMEOUT:-120} --log-level ${LOG_LEVEL:-info} \
   --access-logfile - --error-logfile - --capture-output

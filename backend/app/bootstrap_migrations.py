@@ -200,5 +200,6 @@ async def run_bootstrap_migrations(engine: AsyncEngine, db: AsyncSession) -> Non
         await _create_evaluation_results_table_if_missing(conn)
 
     admin_user = await _seed_admin_user(db)
+    admin_user_id = admin_user.id  # capture before next await expires the ORM object
     await _seed_sample_user(db)
-    await _backfill_user_ids(db, admin_user.id)
+    await _backfill_user_ids(db, admin_user_id)

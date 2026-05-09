@@ -1,7 +1,6 @@
 absl-py==2.3.1
-aider-chat==0.86.2
 aiohappyeyeballs==2.6.1
-aiohttp==3.13.5
+aiohttp==3.13.3
 aiosignal==1.4.0
 aiosqlite==0.22.1
 alembic==1.13.1

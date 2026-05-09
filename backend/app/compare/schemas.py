@@ -72,6 +72,7 @@ class ConfigResult(BaseModel):
     latency_ms: float
     avg_similarity: float
     chunk_count: int
+    evaluation: Optional[Dict[str, Any]] = None
 
 
 class CompareRequest(BaseModel):

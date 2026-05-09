@@ -1,0 +1,69 @@
+# docker-compose.yml — P2.6: local development with PostgreSQL
+# Usage: docker compose up -d
+# The backend will connect to Postgres instead of SQLite when DATABASE_URL is set.
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: raglab
+      POSTGRES_USER: raglab
+      POSTGRES_PASSWORD: raglab
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U raglab -d raglab"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  chroma:
+    image: chromadb/chroma:latest
+    restart: unless-stopped
+    volumes:
+      - chromadata:/chroma/chroma
+    environment:
+      IS_PERSISTENT: "TRUE"
+      ANONYMIZED_TELEMETRY: "FALSE"
+    ports:
+      - "8001:8000"
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "7860:7860"
+    environment:
+      # Switch to Postgres for production
+      DATABASE_URL: postgresql+asyncpg://raglab:raglab@db:5432/raglab
+      CHROMA_PERSIST_DIR: /data/chroma_db
+      UPLOAD_DIR: /data/uploads
+      PDF_IMAGE_INDEXING_ENABLED: ${PDF_IMAGE_INDEXING_ENABLED:-false}
+      HF_IMAGE_EMBEDDING_MODEL: ${HF_IMAGE_EMBEDDING_MODEL:-openai/clip-vit-base-patch32}
+      # Embedding / LLM keys — override in .env or CI secrets
+      NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
+      HUGGINGFACE_API_KEY: ${HUGGINGFACE_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
+      # Tuning knobs
+      MAX_UPLOAD_SIZE_MB: ${MAX_UPLOAD_SIZE_MB:-50}
+      MAX_EMBED_BATCH_SIZE: ${MAX_EMBED_BATCH_SIZE:-96}
+      ODL_TIMEOUT_SECONDS: ${ODL_TIMEOUT_SECONDS:-120}
+      PIPELINE_CACHE_TTL_SECONDS: ${PIPELINE_CACHE_TTL_SECONDS:-3600}
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-4}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_FORMAT: json
+    volumes:
+      - chromadata:/data/chroma_db
+      - uploads:/data/uploads
+
+volumes:
+  pgdata:
+  chromadata:
+  uploads:

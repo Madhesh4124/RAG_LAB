@@ -30,7 +30,7 @@ const DEFAULTS = {
   embedder:    { provider: "nvidia", model: "nvidia/nv-embed-v1" },
   vectorstore: { type: "chroma", collection_name: "my_collection" },
   retriever:   { type: "hybrid", retrieval_type: "hybrid", top_k: 5, similarity_threshold: 0.0, alpha: 0.7, lambda_mult: 0.5, reranker_enabled: false, reranker_provider: "huggingface_api", reranker_model: "BAAI/bge-reranker-base" },
-  llm:         { provider: "gemini", model: "gemma-4-26b-a4b-it" },
+  llm:         { provider: "gemini", model: "gemini-2.5-flash" },
   memory:      { type: "buffer", max_turns: 5, max_turns_before_summary: 5 },
 };
 

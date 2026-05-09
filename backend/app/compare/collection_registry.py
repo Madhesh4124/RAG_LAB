@@ -136,11 +136,20 @@ def get_or_load_collection(
 ) -> Any:
     scoped_collection_name = _scoped_collection_name(collection_name, user_scope)
     embedder = _load_embedder(embedding_provider, embedding_model)
-    return Chroma(
-        collection_name=scoped_collection_name,
-        embedding_function=embedder,
-        client=_get_cached_client(_PERSIST_DIR),
-    )
+    # Support both modern langchain-chroma (client=...) and older/mock
+    # constructors that accept persist_directory only.
+    try:
+        return Chroma(
+            collection_name=scoped_collection_name,
+            embedding_function=embedder,
+            client=_get_cached_client(_PERSIST_DIR),
+        )
+    except TypeError:
+        return Chroma(
+            collection_name=scoped_collection_name,
+            embedding_function=embedder,
+            persist_directory=str(_PERSIST_DIR),
+        )
 
 
 def collection_exists(

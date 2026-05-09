@@ -1,7 +1,11 @@
 import React from 'react';
+import { useState } from "react";
 import ResultCard from "./ResultCard";
+import EvaluationPanel from "../evaluation/EvaluationPanel";
 
 export default function ResultsGrid({ results, isLoading }) {
+  const [selectedResult, setSelectedResult] = useState(null);
+
   if (isLoading) return null;
 
   if (!results || results.length === 0) {
@@ -13,29 +17,40 @@ export default function ResultsGrid({ results, isLoading }) {
   }
 
   return (
-    <section className="space-y-4">
-      <style>{`
-        @keyframes compareFadeIn {
-          from { opacity: 0; transform: translateY(8px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-      `}</style>
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-semibold text-gray-900">Results</h2>
-          <p className="text-sm text-gray-500">Side-by-side output for each staged config.</p>
+    <>
+      <section className="space-y-4">
+        <style>{`
+          @keyframes compareFadeIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+          }
+        `}</style>
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900">Results</h2>
+            <p className="text-sm text-gray-500">Side-by-side output for each staged config.</p>
+          </div>
         </div>
-      </div>
 
-      <div className="overflow-x-auto pb-2">
-        <div className="grid gap-4 grid-cols-1 md:grid-flow-col md:auto-cols-[minmax(320px,1fr)]">
-          {results.map((result) => (
-            <div key={result.config?.name} style={{ animation: "compareFadeIn 0.35s ease both" }}>
-              <ResultCard result={result} />
-            </div>
-          ))}
+        <div className="overflow-x-auto pb-2">
+          <div className="grid gap-4 grid-cols-1 md:grid-flow-col md:auto-cols-[minmax(320px,1fr)]">
+            {results.map((result) => (
+              <div key={result.config?.name} style={{ animation: "compareFadeIn 0.35s ease both" }}>
+                <ResultCard result={result} onOpenEvaluation={setSelectedResult} />
+              </div>
+            ))}
+          </div>
         </div>
-      </div>
-    </section>
+      </section>
+
+      <EvaluationPanel
+        open={Boolean(selectedResult)}
+        onClose={() => setSelectedResult(null)}
+        title={selectedResult ? `${selectedResult.config?.name || "Compare"} Evaluation` : "Compare Evaluation"}
+        report={selectedResult?.evaluation || null}
+        loading={false}
+        error={!selectedResult?.evaluation && selectedResult ? "Evaluation data was not available for this result." : ""}
+      />
+    </>
   );
 }

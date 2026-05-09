@@ -4,7 +4,7 @@ import os
 import uuid
 from copy import deepcopy
 from typing import Any, List
-from fastapi import APIRouter, Depends, HTTPException, Body
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
@@ -22,6 +22,7 @@ from app.services.query_classifier import classify_query
 from app.services.summary_service import SummaryService
 from app.utils.file_processor import FileProcessor
 from app.services.rate_limiter import RateLimitExceededException
+from app.services.indexing_jobs import IndexingJobStore
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 logger = logging.getLogger(__name__)
@@ -31,6 +32,15 @@ GLOBAL_SUMMARY_FALLBACK_QUERY = (
 )
 
 
+def should_precompute_summaries() -> bool:
+    return os.getenv("PRECOMPUTE_SUMMARIES_ON_PREPARE", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def _normalize_scores_for_display(scores: List[float]) -> List[float]:
     """Normalize retrieval/rerank scores to a stable [0, 1] range for UI display."""
     if not scores:
@@ -38,10 +48,7 @@ def _normalize_scores_for_display(scores: List[float]) -> List[float]:
 
     cleaned = [float(s) for s in scores]
     if all(abs(s) < 1e-12 for s in cleaned):
-        n = len(cleaned)
-        if n == 1:
-            return [1.0]
-        return [max(0.0, (n - idx) / n) for idx in range(n)]
+        return [0.0 for _ in cleaned]
 
     # If already in [0, 1], keep as-is.
     if all(0.0 <= s <= 1.0 for s in cleaned):
@@ -152,12 +159,84 @@ class PrepareChatRequest(BaseModel):
     config_id: uuid.UUID
 
 
+async def _run_indexing_background(
+    job_id: str,
+    docs: list,
+    pipeline_config: dict,
+    user_id: str,
+    config_id: str,
+) -> None:
+    """Background task: index all documents and update job status (P2.1)."""
+    from app.services.pipeline_manager import PipelineManager
+
+    IndexingJobStore.update(job_id, status="indexing", progress_pct=0)
+    total = len(docs)
+    try:
+        pipeline = PipelineManager.get_pipeline(f"{user_id}:{config_id}", pipeline_config)
+        indexing_lock = await PipelineManager.get_indexing_lock(f"{user_id}:{config_id}")
+        async with indexing_lock:
+            for i, doc in enumerate(docs):
+                if doc.file_type.lower() == "pdf":
+                    try:
+                        pages = FileProcessor.extract_pdf_pages(doc.content, doc.filename)
+                        await pipeline.aindex_document_with_pages(
+                            pages=pages,
+                            doc_id=str(doc.id),
+                            base_metadata={"filename": doc.filename, "file_type": doc.file_type},
+                        )
+                        await pipeline.aindex_pdf_images(
+                            pdf_content=doc.content,
+                            filename=doc.filename,
+                            doc_id=str(doc.id),
+                            base_metadata={"filename": doc.filename, "file_type": doc.file_type},
+                        )
+                        logger.info(
+                            "[job=%s] Indexed PDF '%s' (%d pages)",
+                            job_id, doc.filename, len(pages),
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "[job=%s] Page-level indexing failed for '%s', using flat fallback: %s",
+                            job_id, doc.filename, e,
+                        )
+                        fallback_text = FileProcessor.extract_pdf_text_fallback(doc.content, doc.filename)
+                        await pipeline.aindex_document(
+                            text=fallback_text,
+                            doc_id=str(doc.id),
+                            metadata={"filename": doc.filename, "file_type": doc.file_type},
+                        )
+                        await pipeline.aindex_pdf_images(
+                            pdf_content=doc.content,
+                            filename=doc.filename,
+                            doc_id=str(doc.id),
+                            base_metadata={"filename": doc.filename, "file_type": doc.file_type},
+                        )
+                else:
+                    await pipeline.aindex_document(
+                        text=doc.content,
+                        doc_id=str(doc.id),
+                        metadata={"filename": doc.filename, "file_type": doc.file_type},
+                    )
+                IndexingJobStore.update(job_id, progress_pct=int((i + 1) / total * 100))
+
+        IndexingJobStore.update(job_id, status="ready", progress_pct=100)
+    except Exception as exc:
+        logger.exception("[job=%s] Indexing failed: %s", job_id, exc)
+        IndexingJobStore.update(job_id, status="failed", error=str(exc))
+
+
 @router.post("/prepare")
 async def prepare_chat_session(
     payload: PrepareChatRequest,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """Validate doc/config, create an indexing job, and return immediately (P2.1).
+
+    The actual indexing runs in a BackgroundTask.  Poll
+    ``GET /api/documents/index-status/{job_id}`` for progress.
+    """
     from app.services.pipeline_manager import PipelineManager
 
     target_doc_ids = payload.document_ids or [payload.document_id]
@@ -191,92 +270,45 @@ async def prepare_chat_session(
         vectorstore_cfg["type"] = "chroma"
         pipeline_config["vectorstore"] = vectorstore_cfg
 
-    pipeline = PipelineManager.get_pipeline(f"{current_user.id}:{config.id}", pipeline_config)
-    for doc in docs:
-        # Use page-level indexing for PDFs, flat indexing for other file types
-        if doc.file_type.lower() == "pdf":
-            try:
-                # Extract PDF pages with structure preservation
-                # doc.content is base64-encoded for PDFs, extract_pdf_pages handles decoding
-                pages = FileProcessor.extract_pdf_pages(doc.content, doc.filename)
-                
-                # Index using page-aware method
-                await pipeline.aindex_document_with_pages(
-                    pages=pages,
-                    doc_id=str(doc.id),
-                    base_metadata={"filename": doc.filename, "file_type": doc.file_type},
-                )
-                logger.info(
-                    "Indexed PDF '%s' (doc_id=%s) with %d pages using structure-preserving chunking",
-                    doc.filename,
-                    doc.id,
-                    len(pages),
-                )
-            except Exception as e:
-                logger.warning(
-                    "Failed to use page-level indexing for PDF '%s', falling back to flat indexing: %s",
-                    doc.filename,
-                    str(e),
-                )
-                # Fallback to flat indexing if page extraction fails.
-                fallback_text = FileProcessor.extract_pdf_text_fallback(doc.content, doc.filename)
+    # --- P2.1: Create job and fire background indexing -----------------------
+    job_id = IndexingJobStore.create(
+        doc_id=str(payload.document_id),
+        config_id=str(payload.config_id),
+    )
 
-                await pipeline.aindex_document(
-                    text=fallback_text,
-                    doc_id=str(doc.id),
-                    metadata={"filename": doc.filename, "file_type": doc.file_type},
-                )
-        else:
-            # Use flat indexing for non-PDF files
-            await pipeline.aindex_document(
-                text=doc.content,
-                doc_id=str(doc.id),
-                metadata={"filename": doc.filename, "file_type": doc.file_type},
+    # Eagerly snapshot doc data so the background task doesn't touch the DB session.
+    docs_snapshot = list(docs)
+    background_tasks.add_task(
+        _run_indexing_background,
+        job_id=job_id,
+        docs=docs_snapshot,
+        pipeline_config=pipeline_config,
+        user_id=str(current_user.id),
+        config_id=str(config.id),
+    )
+    # -------------------------------------------------------------------------
+
+    if should_precompute_summaries():
+        for doc in docs:
+            summary_text = doc.content
+            if doc.file_type.lower() == "pdf":
+                summary_text = FileProcessor.extract_pdf_text_fallback(doc.content, doc.filename)
+            background_tasks.add_task(
+                _precompute_summary_background,
+                user_id=current_user.id,
+                doc_id=doc.id,
+                config_id=config.id,
+                doc_content=summary_text,
+                doc_filename=doc.filename,
+                doc_file_type=doc.file_type,
+                pipeline_config=pipeline_config,
             )
 
     await db.commit()
 
-    summary_tasks = []
-    for doc in docs:
-        summary_text = doc.content
-        if doc.file_type.lower() == "pdf":
-            summary_text = FileProcessor.extract_pdf_text_fallback(doc.content, doc.filename)
-
-        summary_tasks.append(
-            asyncio.create_task(
-                _precompute_summary_background(
-                    user_id=current_user.id,
-                    doc_id=doc.id,
-                    config_id=config.id,
-                    doc_content=summary_text,
-                    doc_filename=doc.filename,
-                    doc_file_type=doc.file_type,
-                    pipeline_config=pipeline_config,
-                )
-            )
-        )
-
-    summary_status = "skipped"
-    if summary_tasks:
-        # Wait briefly for summary precompute, then let any remaining tasks continue.
-        summary_wait_s = float(os.getenv("PREPARE_SUMMARY_WAIT_TIMEOUT_SECONDS", "30"))
-        done, pending = await asyncio.wait(summary_tasks, timeout=summary_wait_s)
-        summary_status = "ready" if not pending else "pending"
-        if pending:
-            logger.info(
-                "Prepare summary precompute still running for %d document(s); returning ready and continuing in background",
-                len(pending),
-            )
-        for task in done:
-            try:
-                task.result()
-            except Exception:
-                # Logged inside background task; keep prepare response successful.
-                pass
-
     return {
-        "status": "ready",
-        "summary_status": summary_status,
+        "status": "indexing",
+        "job_id": job_id,
         "document_id": str(payload.document_id),
         "document_ids": [str(item) for item in normalized_doc_ids],
         "config_id": str(payload.config_id),
@@ -310,6 +342,14 @@ async def chat_endpoint(
     if not config:
         raise HTTPException(status_code=404, detail="Config not found")
 
+    logger.info(
+        "Chat request received user_id=%s doc_id=%s config_id=%s query=%r",
+        current_user.id,
+        doc_id,
+        config_id,
+        query[:200],
+    )
+
     timer = PipelineTimer()
     
     retrieved_results = []
@@ -329,8 +369,20 @@ async def chat_endpoint(
         retrieval_cfg = config.config_json.get("retriever", {}) if config.config_json else {}
         top_k = int(retrieval_cfg.get("top_k", 5))
         similarity_threshold = retrieval_cfg.get("similarity_threshold", None)
+        llm_client = getattr(pipeline, "llm_client", None)
+
+        logger.info(
+            "Chat pipeline ready config_id=%s top_k=%s threshold=%s llm_client=%s llm_ready=%s llm_config=%s",
+            config_id,
+            top_k,
+            similarity_threshold,
+            type(llm_client).__name__ if llm_client else None,
+            bool(llm_client and getattr(llm_client, "llm", None)),
+            pipeline_config.get("llm", {}),
+        )
 
         query_mode = classify_query(query)
+        logger.info("Chat query classified config_id=%s mode=%s", config_id, query_mode)
 
         if query_mode == "global":
             answer = await SummaryService.get_summary(
@@ -364,6 +416,12 @@ async def chat_endpoint(
         else:
             timer.start("retrieval_time_ms")
             retrieved_results = await pipeline.aretrieve(query, top_k=top_k)
+            logger.info(
+                "Chat retrieval completed config_id=%s requested_top_k=%s returned=%d",
+                config_id,
+                top_k,
+                len(retrieved_results or []),
+            )
 
             if similarity_threshold is not None and retrieved_results and isinstance(retrieved_results[0], tuple):
                 retrieved_results = [
@@ -382,7 +440,16 @@ async def chat_endpoint(
                 answer = await pipeline.agenerate(query, retrieved_chunks_only)
                 # Record successful LLM call
                 await rate_limiter.record_call(scope_key, "llm", current_user.id)
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    "LLM generation failed; falling back to retrieved chunks. "
+                    "config_id=%s doc_id=%s llm_config=%s error=%s",
+                    config_id,
+                    doc_id,
+                    (config.config_json or {}).get("llm", {}),
+                    exc,
+                    exc_info=True,
+                )
                 answer = _fallback_answer_from_chunks(query, retrieved_chunks_only)
             finally:
                 timer.stop("llm_time_ms")
@@ -406,17 +473,23 @@ async def chat_endpoint(
         for i, res in enumerate(retrieved_results):
             if isinstance(res, tuple) and len(res) == 2:
                 chunk, score = res
+                chunk_metadata = getattr(chunk, "metadata", {}) or {}
                 retrieved_chunks.append({
-                    "id": str(getattr(chunk, "id", i)), 
-                    "text": getattr(chunk, "text", str(chunk)), 
-                    "score": float(display_scores[i]) if i < len(display_scores) else float(score)
+                    "id": str(getattr(chunk, "id", i)),
+                    "text": chunk_metadata.get("window_text") or getattr(chunk, "text", str(chunk)),
+                    "score": float(display_scores[i]) if i < len(display_scores) else float(score),
+                    "raw_score": float(score),
+                    "section_heading": chunk_metadata.get("section_heading"),
                 })
             else:
                 chunk = res
+                chunk_metadata = getattr(chunk, "metadata", {}) or {}
                 retrieved_chunks.append({
-                    "id": str(getattr(chunk, "id", i)), 
-                    "text": getattr(chunk, "text", str(chunk)), 
-                    "score": float(display_scores[i]) if i < len(display_scores) else float(getattr(chunk, "score", 0.0))
+                    "id": str(getattr(chunk, "id", i)),
+                    "text": chunk_metadata.get("window_text") or getattr(chunk, "text", str(chunk)),
+                    "score": float(display_scores[i]) if i < len(display_scores) else float(getattr(chunk, "score", 0.0)),
+                    "raw_score": float(getattr(chunk, "score", 0.0)),
+                    "section_heading": chunk_metadata.get("section_heading"),
                 })
 
     user_msg = ChatMessage(
@@ -521,6 +594,14 @@ async def chat_stream_endpoint(
     if not docs or len(docs) != len(normalized_ids) or not config:
         raise HTTPException(status_code=404, detail="Resource not found")
 
+    logger.info(
+        "Streaming chat request received user_id=%s doc_ids=%s config_id=%s query=%r",
+        current_user.id,
+        [str(item) for item in normalized_ids],
+        config_id,
+        query[:200],
+    )
+
     pipeline_config = deepcopy(config.config_json or {})
     vectorstore_cfg = deepcopy(pipeline_config.get("vectorstore", {}))
     if vectorstore_cfg.get("type", "chroma") == "chroma":
@@ -532,7 +613,18 @@ async def chat_stream_endpoint(
     retrieval_cfg = pipeline_config.get("retriever", {})
     top_k = int(retrieval_cfg.get("top_k", 5))
     similarity_threshold = float(retrieval_cfg.get("similarity_threshold", 0.0))
+    llm_client = getattr(pipeline, "llm_client", None)
     query_mode = classify_query(query)
+    logger.info(
+        "Streaming chat pipeline ready config_id=%s query_mode=%s top_k=%s threshold=%s llm_client=%s llm_ready=%s llm_config=%s",
+        config_id,
+        query_mode,
+        top_k,
+        similarity_threshold,
+        type(llm_client).__name__ if llm_client else None,
+        bool(llm_client and getattr(llm_client, "llm", None)),
+        pipeline_config.get("llm", {}),
+    )
 
     async def event_generator():
         try:
@@ -583,7 +675,11 @@ async def chat_stream_endpoint(
                         summary_text = _fallback_answer_from_chunks(query, chunks)
 
                 chunk_meta = [
-                    {"text": getattr(c, "text", ""), "score": round(scores[idx], 4)}
+                    {
+                        "text": (getattr(c, "metadata", {}) or {}).get("window_text") or getattr(c, "text", ""),
+                        "score": round(scores[idx], 4),
+                        "raw_score": round(raw_scores[idx], 4) if idx < len(raw_scores) else None,
+                    }
                     for idx, c in enumerate(chunks)
                 ]
                 yield f"data: {json.dumps({'type': 'metadata', 'chunks': chunk_meta})}\n\n"
@@ -594,6 +690,12 @@ async def chat_stream_endpoint(
                 _msg2 = json.dumps({'type': 'status', 'message': 'Retrieving relevant chunks…'})
                 yield f"data: {_msg2}\n\n"
                 results = await pipeline.aretrieve(query, top_k=top_k)
+                logger.info(
+                    "Streaming chat retrieval completed config_id=%s requested_top_k=%s returned=%d",
+                    config_id,
+                    top_k,
+                    len(results or []),
+                )
 
                 if similarity_threshold > 0 and results and isinstance(results[0], tuple):
                     filtered = [(c, s) for c, s in results if s >= similarity_threshold]
@@ -606,17 +708,35 @@ async def chat_stream_endpoint(
 
                 # 2. Send full chunk text + score
                 chunk_meta = [
-                    {"text": getattr(c, "text", ""), "score": round(scores[idx], 4)}
+                    {
+                        "text": (getattr(c, "metadata", {}) or {}).get("window_text") or getattr(c, "text", ""),
+                        "score": round(scores[idx], 4),
+                        "raw_score": round(raw_scores[idx], 4) if idx < len(raw_scores) else None,
+                        "section_heading": (getattr(c, "metadata", {}) or {}).get("section_heading"),
+                    }
                     for idx, c in enumerate(chunks)
                 ]
                 yield f"data: {json.dumps({'type': 'metadata', 'chunks': chunk_meta})}\n\n"
 
                 # 3. Stream generation tokens
                 full_response = ""
-                async for token in pipeline.agenerate_stream(query, chunks):
-                    llm_used = True
-                    full_response += token
-                    yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
+                try:
+                    async for token in pipeline.agenerate_stream(query, chunks):
+                        llm_used = True
+                        full_response += token
+                        yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
+                except Exception as exc:
+                    logger.warning(
+                        "Streaming LLM generation failed; falling back to retrieved chunks. "
+                        "config_id=%s doc_id=%s llm_config=%s error=%s",
+                        config_id,
+                        doc_id,
+                        (config.config_json or {}).get("llm", {}),
+                        exc,
+                        exc_info=True,
+                    )
+                    full_response = _fallback_answer_from_chunks(query, chunks)
+                    yield f"data: {json.dumps({'type': 'token', 'content': full_response})}\n\n"
 
             # Record successful LLM call in a short-lived session.
             if llm_used:
@@ -624,10 +744,9 @@ async def chat_stream_endpoint(
                     limiter = DatabaseRateLimiter(limiter_db)
                     await limiter.record_call(scope_key, "llm", current_user.id)
 
-            # Notify UI immediately that generation is complete.
-            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+            assistant_message_id = None
 
-            # 4. Persist to DB (non-blocking for UI because done is already sent)
+            # 4. Persist to DB
             try:
                 async with AsyncSessionLocal() as write_db:
                     user_msg = ChatMessage(
@@ -648,8 +767,13 @@ async def chat_stream_endpoint(
                     )
                     write_db.add(assistant_msg)
                     await write_db.commit()
+                    await write_db.refresh(assistant_msg)
+                    assistant_message_id = str(assistant_msg.id)
             except Exception:
                 pass
+
+            # Notify UI only after the message is safely persisted so evaluation can load it.
+            yield f"data: {json.dumps({'type': 'done', 'message_id': assistant_message_id})}\n\n"
 
         except asyncio.CancelledError:
             # Client disconnected mid-stream.

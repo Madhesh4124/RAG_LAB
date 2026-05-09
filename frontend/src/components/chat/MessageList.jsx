@@ -21,7 +21,7 @@ export default function MessageList({ messages }) {
   return (
     <div className="space-y-4">
       {messages.map((msg, i) => (
-        <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+        <div key={msg.id || i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
           <div className={`max-w-[78%] rounded-2xl px-4 py-3 text-sm
             ${msg.role === "user"
               ? "bg-blue-600 text-white rounded-br-sm"
@@ -53,22 +53,38 @@ export default function MessageList({ messages }) {
                 </button>
 
                 {expandedChunks[i] && msg.chunks.map((chunk, j) => {
-                  const score = typeof chunk.score === "number" ? chunk.score : null;
+                  const score = typeof chunk.score === "number"
+                    ? chunk.score
+                    : typeof chunk.raw_score === "number"
+                      ? chunk.raw_score
+                      : null;
+                  const rawScore = typeof chunk.raw_score === "number" ? chunk.raw_score : null;
                   const scoreColor =
                     score === null ? "text-gray-400"
                     : score >= 0.75 ? "text-emerald-600 font-semibold"
                     : score >= 0.5  ? "text-yellow-600"
-                    : "text-red-500";
+                    : score > 0 ? "text-red-500"
+                    : "text-gray-400";
+                  const scoreLabel =
+                    score === null ? "score unavailable"
+                    : `${(score * 100).toFixed(1)} retrieval score`;
+                  const rawScoreLabel =
+                    rawScore === null || rawScore === score ? null
+                    : `raw ${(rawScore * 100).toFixed(1)}`;
                   return (
                     <div key={j} className="rounded-lg bg-gray-50 border border-gray-200 px-3 py-2 hover:border-blue-200 transition-colors">
                       <div className="flex justify-between items-center mb-1">
                         <span className="text-xs font-mono text-gray-400">#{j + 1}</span>
-                        {score !== null && (
-                          <span className={`text-xs ${scoreColor}`}>
-                            {(score * 100).toFixed(1)}% match
-                          </span>
-                        )}
+                        <span className={`text-xs ${scoreColor}`}>
+                          {scoreLabel}
+                          {rawScoreLabel ? ` · ${rawScoreLabel}` : ""}
+                        </span>
                       </div>
+                      {chunk.section_heading && (
+                        <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+                          {chunk.section_heading}
+                        </p>
+                      )}
                       <p className="text-xs text-gray-600 line-clamp-3 leading-relaxed">{chunk.text}</p>
                     </div>
                   );

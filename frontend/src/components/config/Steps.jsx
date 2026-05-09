@@ -209,9 +209,9 @@ export function LLMStep({ memoryConfig, onMemoryChange }) {
       <div className="rounded-xl border border-gray-200 bg-white p-4 space-y-3">
         <label className="text-sm font-medium text-gray-700">Model</label>
         <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-800">
-          Gemma 4 26B A4B IT
+          Gemini 2.5 Flash
         </div>
-        <p className="text-xs text-gray-400">Gemma is used for answer synthesis.</p>
+        <p className="text-xs text-gray-400">Gemini is used for answer synthesis.</p>
       </div>
 
       {/* Memory Configuration */}

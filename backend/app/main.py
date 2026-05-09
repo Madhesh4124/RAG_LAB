@@ -1,13 +1,14 @@
 import logging
 import os
 import json
+import time
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, status, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.background import BackgroundTask
 from itsdangerous import BadSignature
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.database import engine, Base, AsyncSessionLocal
 from app.bootstrap_migrations import run_bootstrap_migrations
@@ -27,12 +28,21 @@ from app.api.metrics import router as metrics_router
 from app.compare.router import router as compare_module_router
 from app.services.rate_limiter import DatabaseRateLimiter, RateLimitExceededException
 from app.services.email_service import EmailService
+from app.middleware.request_id_middleware import RequestIDMiddleware
 
 # Suppress noisy Chroma telemetry errors (version mismatch with posthog)
 logging.getLogger("chromadb.telemetry.product.posthog").setLevel(logging.CRITICAL)
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+def _log_level_from_env() -> int:
+    raw_level = os.getenv("LOG_LEVEL", "INFO").strip().upper()
+    return getattr(logging, raw_level, logging.INFO)
+
+
+class _SafeRequestFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        if not hasattr(record, "request_id"):
+            record.request_id = "-"  # type: ignore[attr-defined]
+        return super().format(record)
 
 
 class _JsonLogFormatter(logging.Formatter):
@@ -42,18 +52,38 @@ class _JsonLogFormatter(logging.Formatter):
             "logger": record.name,
             "message": record.getMessage(),
             "time": self.formatTime(record, self.datefmt),
+            "request_id": getattr(record, "request_id", "-"),
         }
         if record.exc_info:
             payload["exception"] = self.formatException(record.exc_info)
         return json.dumps(payload, ensure_ascii=True)
 
-
-if os.getenv("LOG_FORMAT", "text").strip().lower() == "json":
+def _configure_app_logging() -> None:
     root_logger = logging.getLogger()
+    root_logger.setLevel(_log_level_from_env())
+
+    if not root_logger.handlers:
+        logging.basicConfig(level=_log_level_from_env())
+
+    if os.getenv("LOG_FORMAT", "text").strip().lower() == "json":
+        formatter = _JsonLogFormatter()
+    else:
+        formatter = _SafeRequestFormatter(
+            "%(levelname)s:%(name)s:[req=%(request_id)s] %(message)s"
+        )
+
     for handler in root_logger.handlers:
-        handler.setFormatter(_JsonLogFormatter())
+        handler.setFormatter(formatter)
+
+
+# Configure logging before the app is created so uvicorn/gunicorn workers inherit it.
+_configure_app_logging()
 
 logger = logging.getLogger(__name__)
+
+
+def _env_flag(name: str, default: str = "0") -> bool:
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _configure_third_party_logging() -> None:
@@ -86,15 +116,35 @@ email_service = EmailService()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Initializing database tables...")
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    startup_started = time.perf_counter()
 
-    async with AsyncSessionLocal() as db:
-        await run_bootstrap_migrations(engine, db)
+    if _env_flag("RUN_ALEMBIC_MIGRATIONS", "1"):
+        phase_started = time.perf_counter()
+        logger.info("Running alembic migrations...")
+        import alembic.config
+        import alembic.command
+        import asyncio
+        alembic_cfg = alembic.config.Config("alembic.ini")
+        try:
+            await asyncio.to_thread(alembic.command.upgrade, alembic_cfg, "head")
+            _configure_app_logging()
+            logger.info("Alembic migrations finished in %.2fms", (time.perf_counter() - phase_started) * 1000)
+        except Exception as e:
+            _configure_app_logging()
+            logger.error("Alembic migration failed: %s", e)
+    else:
+        logger.info("Skipping database migrations.")
+
+    if _env_flag("RUN_BOOTSTRAP_MIGRATIONS", "1"):
+        phase_started = time.perf_counter()
+        async with AsyncSessionLocal() as db:
+            await run_bootstrap_migrations(engine, db)
+        logger.info("Bootstrap migrations finished in %.2fms", (time.perf_counter() - phase_started) * 1000)
+    else:
+        logger.info("Skipping bootstrap migrations.")
 
     # Startup event to notify users logging cleanly
-    logger.info("RAG Lab API is ready")
+    logger.info("RAG Lab API is ready in %.2fms", (time.perf_counter() - startup_started) * 1000)
     print("RAG Lab API is ready")  # explicit local console signal
     yield
 
@@ -190,8 +240,11 @@ app.add_middleware(
     allow_origin_regex=r"https://([a-zA-Z0-9-]+\.)*(vercel\.app|hf\.space)",
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept", "X-Requested-With"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-Requested-With", "X-Request-ID"],
 )
+
+# P3.3 — X-Request-ID middleware (must be added after CORS so it runs on every request).
+app.add_middleware(RequestIDMiddleware)
 
 # Register all API specific routers directly
 app.include_router(auth_router)
@@ -210,6 +263,43 @@ app.include_router(compare_module_router)
 def root():
     return {"status": "RAG Lab API backend is online"}
 
+
 @app.get("/health")
-def health():
+@app.get("/health/live")
+def health_live():
+    """Liveness probe — returns 200 if the process is alive."""
     return {"status": "ok"}
+
+
+@app.get("/health/ready")
+async def health_ready():
+    """Readiness probe (P4.3) — checks DB connectivity and Chroma availability.
+
+    Returns HTTP 503 if either dependency is unhealthy so load-balancers and
+    Kubernetes readiness gates can route traffic away from an unready pod.
+    """
+    checks: dict = {}
+
+    # 1. Database liveness: run a trivial SELECT 1.
+    try:
+        async with AsyncSessionLocal() as db:
+            await db.execute(text("SELECT 1"))
+        checks["database"] = "ok"
+    except Exception as exc:
+        logger.error("Health/ready: DB check failed: %s", exc)
+        checks["database"] = f"error: {exc}"
+
+    # 2. Chroma vector-store: call heartbeat() on the shared persistent client.
+    try:
+        from app.services.vectorstore.chroma_store import _get_cached_persistent_client
+        chroma_dir = os.getenv("CHROMA_PERSIST_DIR", "/data/chroma_db")
+        client = _get_cached_persistent_client(chroma_dir)
+        client.heartbeat()
+        checks["chroma"] = "ok"
+    except Exception as exc:
+        logger.error("Health/ready: Chroma check failed: %s", exc)
+        checks["chroma"] = f"error: {exc}"
+
+    all_ok = all(v == "ok" for v in checks.values())
+    status_code = status.HTTP_200_OK if all_ok else status.HTTP_503_SERVICE_UNAVAILABLE
+    return JSONResponse(status_code=status_code, content={"status": "ready" if all_ok else "degraded", "checks": checks})

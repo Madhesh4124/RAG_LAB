@@ -14,7 +14,9 @@ class PipelineTimer:
     def stop(self, stage_name: str) -> None:
         """Stops the timer for a stage and calculates duration in milliseconds."""
         if stage_name not in self._start_times:
-            raise ValueError(f"Timer for stage '{stage_name}' was never started.")
+            # P3.4: Be resilient to missing start calls instead of crashing the request.
+            # This can happen if the pipeline is used concurrently without proper isolation.
+            return
 
         end_time = time.perf_counter()
         elapsed_sec = end_time - self._start_times.pop(stage_name)
@@ -34,6 +36,7 @@ class PipelineTimer:
             "chunking_time_ms": self._durations.get("chunking_time_ms", 0.0),
             "embedding_time_ms": self._durations.get("embedding_time_ms", 0.0),
             "retrieval_time_ms": self._durations.get("retrieval_time_ms", 0.0),
+            "reranking_time_ms": self._durations.get("reranking_time_ms", 0.0),
             "llm_time_ms": self._durations.get("llm_time_ms", 0.0),
             "total_time_ms": self.get_total_ms()
         }

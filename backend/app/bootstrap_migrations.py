@@ -4,6 +4,7 @@ import uuid
 from sqlalchemy import inspect, select, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
 
+from app.models.evaluation import EvaluationResult
 from app.models.user import User
 
 
@@ -12,6 +13,14 @@ async def _column_exists(conn: AsyncConnection, table_name: str, column_name: st
         inspector = inspect(sync_conn)
         columns = inspector.get_columns(table_name)
         return any(col["name"] == column_name for col in columns)
+
+    return await conn.run_sync(_inspect)
+
+
+async def _table_exists(conn: AsyncConnection, table_name: str) -> bool:
+    def _inspect(sync_conn):
+        inspector = inspect(sync_conn)
+        return inspector.has_table(table_name)
 
     return await conn.run_sync(_inspect)
 
@@ -53,6 +62,13 @@ async def _add_is_admin_if_missing(conn: AsyncConnection) -> None:
         ddl = "ALTER TABLE users ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT 0"
 
     await conn.execute(text(ddl))
+
+
+async def _create_evaluation_results_table_if_missing(conn: AsyncConnection) -> None:
+    if await _table_exists(conn, EvaluationResult.__tablename__):
+        return
+
+    await conn.run_sync(lambda sync_conn: EvaluationResult.__table__.create(sync_conn, checkfirst=True))
 
 
 async def _seed_admin_user(db: AsyncSession) -> User:
@@ -158,6 +174,7 @@ async def run_bootstrap_migrations(engine: AsyncEngine, db: AsyncSession) -> Non
 
         await _add_password_reset_count_if_missing(conn)
         await _add_is_admin_if_missing(conn)
+        await _create_evaluation_results_table_if_missing(conn)
 
     admin_user = await _seed_admin_user(db)
     await _seed_sample_user(db)

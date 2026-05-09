@@ -102,6 +102,12 @@ async def compare_configs(
                         doc_id=str(document_id),
                         base_metadata=metadata,
                     )
+                    await pipeline.aindex_pdf_images(
+                        pdf_content=doc.content,
+                        filename=doc.filename,
+                        doc_id=str(document_id),
+                        base_metadata=metadata,
+                    )
                 except Exception as e:
                     logger.warning("Compare: PDF page indexing failed, falling back: %s", str(e))
                     fallback_text = FileProcessor.extract_pdf_text_fallback(doc.content, doc.filename)
@@ -110,6 +116,12 @@ async def compare_configs(
                         text=fallback_text,
                         doc_id=str(document_id),
                         metadata=metadata
+                    )
+                    await pipeline.aindex_pdf_images(
+                        pdf_content=doc.content,
+                        filename=doc.filename,
+                        doc_id=str(document_id),
+                        base_metadata=metadata,
                     )
             else:
                 await pipeline.aindex_document(

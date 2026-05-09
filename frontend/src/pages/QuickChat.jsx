@@ -6,7 +6,9 @@ import { Button } from "../components/common/index";
 import DocumentPicker from "../components/upload/DocumentPicker";
 import UploadDocumentsModal from "../components/upload/UploadDocumentsModal";
 import { useSession } from "../hooks/useSession";
-import { applyBestPreset, prepareChatSession, uploadDocument } from "../services/api";
+import { applyBestPreset, getIndexStatus, prepareChatSession, uploadDocument } from "../services/api";
+
+const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
 export default function QuickChat() {
   const { docId, docIds, configId, filename, setDocId, setDocIds, setConfigId, setFilename, setMode } = useSession();
@@ -24,6 +26,8 @@ export default function QuickChat() {
   const [showControls, setShowControls] = useState(true);
   const [error, setError] = useState("");
   const [reloadToken, setReloadToken] = useState(0);
+  const [indexStatusMessage, setIndexStatusMessage] = useState("Creating indexing job...");
+  const [indexProgress, setIndexProgress] = useState(0);
 
   const primaryDocId = useMemo(() => selectedDocIds[0] || "", [selectedDocIds]);
 
@@ -89,6 +93,8 @@ export default function QuickChat() {
     if (!primaryDocId) return;
     setStage("indexing");
     setError("");
+    setIndexStatusMessage("Creating indexing job...");
+    setIndexProgress(0);
     try {
       const { data } = await applyBestPreset({ document_id: primaryDocId });
       const nextConfigId = data?.id || null;
@@ -98,11 +104,47 @@ export default function QuickChat() {
 
       setDocId(primaryDocId);
       setConfigId(nextConfigId);
-      await prepareChatSession({
+      const prepareResponse = await prepareChatSession({
         document_id: primaryDocId,
         document_ids: selectedDocIds,
         config_id: nextConfigId,
       });
+      const jobId = prepareResponse?.data?.job_id;
+
+      if (jobId) {
+        const startedAt = Date.now();
+        const timeoutMs = 10 * 60 * 1000;
+
+        while (true) {
+          const statusResponse = await getIndexStatus(jobId);
+          const status = statusResponse?.data?.status || "pending";
+          const progress = Number(statusResponse?.data?.progress_pct ?? 0);
+
+          setIndexProgress(progress);
+
+          if (status === "ready") {
+            setIndexStatusMessage("Indexing complete.");
+            setIndexProgress(100);
+            break;
+          }
+
+          if (status === "failed") {
+            throw new Error(statusResponse?.data?.error || "Indexing failed.");
+          }
+
+          setIndexStatusMessage(
+            status === "indexing"
+              ? `Indexing ${selectedDocIds.length} document(s)... ${progress}%`
+              : "Waiting for indexing to start..."
+          );
+
+          if ((Date.now() - startedAt) > timeoutMs) {
+            throw new Error("Indexing is taking too long. Please try again.");
+          }
+
+          await sleep(1000);
+        }
+      }
       setStage("chat");
       setShowControls(false);
     } catch (err) {
@@ -124,6 +166,16 @@ export default function QuickChat() {
             <p className="text-sm text-gray-500">
               We are preparing {selectedDocIds.length} selected document(s) before opening chat.
             </p>
+            <div className="space-y-2">
+              <p className="text-sm text-gray-600">{indexStatusMessage}</p>
+              <div className="overflow-hidden rounded-full bg-gray-100">
+                <div
+                  className="h-2 rounded-full bg-blue-600 transition-all duration-300"
+                  style={{ width: `${Math.max(8, indexProgress)}%` }}
+                />
+              </div>
+              <p className="text-xs text-gray-400">{indexProgress}% complete</p>
+            </div>
             <p className="text-xs text-gray-400">
               The first setup is doing the expensive pipeline work now so your chat starts faster.
             </p>

@@ -15,6 +15,7 @@ from app.auth import get_current_user
 from app.models.user import User
 from app.models.document import Document
 from app.services.best_preset import BEST_PRESET_NAME, BEST_PRESET_VERSION, get_best_preset_config
+from app.services.pdf_loader import get_pdf_parser_status
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/config", tags=["config"])
@@ -33,6 +34,12 @@ async def get_best_preset(current_user: User = Depends(get_current_user)):
         "version": BEST_PRESET_VERSION,
         "config_json": get_best_preset_config(),
     }
+
+
+@router.get("/pdf-parser-status")
+async def get_pdf_parser_runtime_status(current_user: User = Depends(get_current_user)):
+    _ = current_user
+    return get_pdf_parser_status()
 
 
 @router.post("/best-preset/apply", response_model=RAGConfigResponse)

@@ -14,8 +14,9 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from app.services.chunking.base import BaseChunker, Chunk
 
-# Keep sentence splitting aligned with SemanticChunker (split on paragraph boundaries).
+# Split on sentence boundaries, paragraph boundaries, and bullet/list lines.
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n\n+")
+_BULLET_LINE_RE = re.compile(r"^\s*(?:[-*]|\d+[.)])\s+")
 logger = logging.getLogger(__name__)
 
 
@@ -74,9 +75,12 @@ class SentenceWindowChunker(BaseChunker):
 
     @staticmethod
     def _split_sentences(text: str) -> List[str]:
-        segments = _SENTENCE_SPLIT_RE.split(text)
+        # Keep bullet/list items independently retrievable instead of gluing
+        # an entire study-note section into one oversized sentence.
+        normalized = re.sub(r"\n\s*(?:[-*]|\d+[.)])\s+", lambda m: f"\n\n{m.group(0).strip()} ", text)
+        segments = _SENTENCE_SPLIT_RE.split(normalized)
         sentences = [s for s in segments if s.strip()]
-        
+
         # Sub-split segments that are too long to prevent memory blow-up.
         max_segment_chars = int(os.getenv("SENTENCE_WINDOW_MAX_SEGMENT_CHARS", "2000"))
         final_sentences = []
@@ -89,6 +93,24 @@ class SentenceWindowChunker(BaseChunker):
             else:
                 final_sentences.append(s)
         return final_sentences
+
+    @staticmethod
+    def _is_bullet_like(text: str) -> bool:
+        return bool(_BULLET_LINE_RE.match(str(text or "").strip()))
+
+    @staticmethod
+    def _is_section_heading(text: str) -> bool:
+        candidate = str(text or "").strip()
+        if not candidate or "\n" in candidate:
+            return False
+        if len(candidate) > 90 or SentenceWindowChunker._is_bullet_like(candidate):
+            return False
+        if re.search(r"[.!?:;]$", candidate):
+            return False
+        words = candidate.split()
+        if not 1 <= len(words) <= 8:
+            return False
+        return any(ch.isalpha() for ch in candidate)
 
     @staticmethod
     def _find_sentence_span(
@@ -153,6 +175,8 @@ class SentenceWindowChunker(BaseChunker):
             if span:
                 cursor = span[1]
 
+        current_section_heading: Optional[str] = None
+
         for idx, sentence in enumerate(sentences):
             span = spans[idx]
             if span is None:
@@ -160,6 +184,10 @@ class SentenceWindowChunker(BaseChunker):
                 logger.warning("Could not locate sentence span for: %r", sentence[:120])
                 continue
             start_idx, end_idx = span
+            clean_sentence = sentence.strip()
+
+            if self._is_section_heading(clean_sentence):
+                current_section_heading = clean_sentence
 
             # Compute left/right reach independently so the centre sentence
             # always occupies exactly one slot and the total window size
@@ -187,8 +215,17 @@ class SentenceWindowChunker(BaseChunker):
             else:
                 window_text = sentence
 
+            indexed_text = sentence
+            if current_section_heading and clean_sentence != current_section_heading:
+                if current_section_heading not in clean_sentence[: len(current_section_heading) + 2]:
+                    indexed_text = f"{current_section_heading}\n{sentence}"
+                if current_section_heading not in window_text[: len(current_section_heading) + 2]:
+                    window_text = f"{current_section_heading}\n{window_text}"
+
             chunk_metadata = copy.deepcopy(metadata)
             chunk_metadata["window_text"] = window_text
+            if current_section_heading:
+                chunk_metadata["section_heading"] = current_section_heading
 
             if self.max_chunk_size and self.length_fn(sentence) > self.max_chunk_size:
                 fallback = self._resolve_fallback_chunker()
@@ -205,7 +242,7 @@ class SentenceWindowChunker(BaseChunker):
                 chunks.append(
                     Chunk(
                         id=uuid.uuid4(),
-                        text=sentence,
+                        text=indexed_text,
                         metadata=chunk_metadata,
                         start_char=start_idx,
                         end_char=end_idx,

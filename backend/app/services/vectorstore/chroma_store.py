@@ -43,7 +43,8 @@ class _EmbedderAdapter:
         self.embedder = embedder
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        return self.embedder.embed_batch(texts)
+        # P2.2: use embed_in_batches to respect MAX_EMBED_BATCH_SIZE (default 96).
+        return self.embedder.embed_in_batches(texts)
 
     def embed_query(self, text: str) -> List[float]:
         return self.embedder.embed_text(text)
@@ -161,6 +162,12 @@ class ChromaStore(BaseVectorStore):
 
         if doc_id and self.is_document_indexed(doc_id=doc_id, content_hash=content_hash):
             return
+
+        if doc_id and content_hash and self.is_document_indexed(doc_id=doc_id):
+            # The document exists in this collection, but not with the current
+            # content/config hash. Replace stale chunks so retrieval does not
+            # mix old chunk boundaries with the fresh index.
+            self.delete_document(doc_id)
 
         docs = []
         for chunk in chunks:

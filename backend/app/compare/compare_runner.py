@@ -11,6 +11,7 @@ from app.compare.collection_registry import get_or_load_collection
 from app.compare.utils import calc_avg_similarity, filter_by_threshold, derive_config_signature
 from app.compare.schemas import ConfigResult, RAGConfig
 from app.services.chunking.base import Chunk
+from app.services.evaluation.retrieval_metrics import build_retrieval_metrics_report
 from app.services.query_classifier import classify_query
 from app.services.summary_service import SummaryService
 from app.compare.summary_store import get_summary as get_compare_summary, upsert_summary as upsert_compare_summary
@@ -156,6 +157,25 @@ async def run_single_config(
             latency_ms=round(latency_ms, 3),
             avg_similarity=calc_avg_similarity(scores),
             chunk_count=len(chunks),
+            evaluation=build_retrieval_metrics_report(
+                query=query,
+                answer=answer,
+                retrieved_chunks=[
+                    {"text": chunk_text, "score": scores[idx] if idx < len(scores) else 0.0}
+                    for idx, chunk_text in enumerate(chunks)
+                ],
+                candidate_chunks=[
+                    {"text": _extract_text(doc), "score": float(score)}
+                    for doc, score in fallback_results
+                ],
+                llm_client=_LLMWrapper(llm),
+                retrieval_config={
+                    "type": "compare",
+                    "top_k": config.top_k,
+                    "similarity_threshold": config.threshold,
+                },
+                query_mode="global",
+            ),
         )
 
     raw_results = await asyncio.to_thread(
@@ -202,6 +222,25 @@ async def run_single_config(
         latency_ms=round(latency_ms, 3),
         avg_similarity=calc_avg_similarity(scores),
         chunk_count=len(chunks),
+        evaluation=build_retrieval_metrics_report(
+            query=query,
+            answer=answer,
+            retrieved_chunks=[
+                {"text": chunk_text, "score": scores[idx] if idx < len(scores) else 0.0}
+                for idx, chunk_text in enumerate(chunks)
+            ],
+            candidate_chunks=[
+                {"text": _extract_text(doc), "score": float(score)}
+                for doc, score in normalized_results
+            ],
+            llm_client=_LLMWrapper(llm),
+            retrieval_config={
+                "type": "compare",
+                "top_k": config.top_k,
+                "similarity_threshold": config.threshold,
+            },
+            query_mode="local",
+        ),
     )
 
 

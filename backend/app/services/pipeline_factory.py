@@ -46,9 +46,9 @@ class PipelineFactory:
             kwargs = {
                 "max_chunk_size": kwargs.get("max_chunk_size", 512),
                 "similarity_threshold": kwargs.get("similarity_threshold", 0.7),
-                "min_chunk_size": kwargs.get("min_chunk_size", 100),
+                "min_chunk_size": kwargs.get("min_chunk_size", 180),
                 "use_centroid": kwargs.get("use_centroid", True),
-                "overlap_sentences": kwargs.get("overlap_sentences", 1),
+                "overlap_sentences": kwargs.get("overlap_sentences", 2),
                 "hard_split_threshold": kwargs.get("hard_split_threshold", 0.4),
                 "max_sentences_per_chunk": kwargs.get("max_sentences_per_chunk"),
                 "smoothing_margin": kwargs.get("smoothing_margin", 0.05),
@@ -147,9 +147,8 @@ class PipelineFactory:
         kwargs = config.copy()
         strategy = kwargs.pop("type", None)
 
-        # Chroma is the only supported vector store. Normalize legacy or
-        # incomplete configurations to chroma.
-        if strategy != "chroma":
+        # Default to chroma if empty
+        if not strategy:
             strategy = "chroma"
 
         if strategy == "chroma":
@@ -158,6 +157,12 @@ class PipelineFactory:
                 return ChromaStore(**kwargs)
             except ImportError as e:
                 raise PipelineConfigError(f"Failed to import ChromaStore: {e}")
+        elif strategy == "qdrant":
+            try:
+                from app.services.vectorstore.qdrant_store import QdrantStore
+                return QdrantStore(**kwargs)
+            except ImportError as e:
+                raise PipelineConfigError(f"Failed to import QdrantStore: {e}")
         else:
             raise PipelineConfigError(f"Unknown vectorstore strategy: {strategy}")
 
@@ -166,29 +171,31 @@ class PipelineFactory:
         """Create a retriever dynamically based on the configuration."""
         if not config:
             return None
-            
+
         type_ = config.get("retrieval_type", config.get("type", "hybrid"))
-        
+        # Resolve the collection name from the vectorstore for BM25 cache keying.
+        collection_name: Optional[str] = getattr(vectorstore, "collection_name", None)
+
         if type_ == "hybrid":
             from app.services.retrieval.dense_retriever import DenseRetriever
             from app.services.retrieval.sparse_retriever import BM25Retriever
             from app.services.retrieval.hybrid_retriever import HybridRetriever
             dr = DenseRetriever(vectorstore, embedder)
-            
+
             # chunks can be loaded or passed from config
             chunks = config.get("chunks", [])
-            sr = BM25Retriever(chunks)
+            sr = BM25Retriever(chunks, collection_name=collection_name)
             alpha = config.get("alpha", 0.7)
             return HybridRetriever(dense_retriever=dr, sparse_retriever=sr, alpha=alpha)
-            
+
         elif type_ == "dense":
             from app.services.retrieval.dense_retriever import DenseRetriever
             return DenseRetriever(vectorstore, embedder)
-            
+
         elif type_ == "sparse":
             from app.services.retrieval.sparse_retriever import BM25Retriever
             chunks = config.get("chunks", [])
-            return BM25Retriever(chunks)
+            return BM25Retriever(chunks, collection_name=collection_name)
             
         elif type_ == "mmr":
             from app.services.retrieval.dense_retriever import DenseRetriever
@@ -205,11 +212,13 @@ class PipelineFactory:
         """Create an LLM client dynamically based on the configuration."""
         if not config:
             return None
-            
-        provider = config.get("provider")
+
+        provider = config.get("provider") or ("gemini" if config.get("model") else None)
         if provider == "gemini":
             from app.services.llm.gemini_client import GeminiClient
-            model = config.get("model", "gemma-4-26b-a4b-it")
+            model = config.get("model")
+            if model == "gemma-4-26b-a4b-it":
+                model = None
             temperature = config.get("temperature", 0.2)
             return GeminiClient(model=model, temperature=temperature)
             
@@ -223,9 +232,14 @@ class PipelineFactory:
             
         type_ = config.get("type")
         
+        max_turns = int(config.get("max_turns", 5))
+        max_turns_before_summary = int(config.get("max_turns_before_summary", max(1, max_turns - 1)))
+        if max_turns_before_summary >= max_turns:
+            max_turns_before_summary = max(1, max_turns - 1)
+
         if type_ == "buffer":
             from app.services.memory.buffer_memory import BufferMemory
-            return BufferMemory(max_turns=config.get("max_turns", 5))
+            return BufferMemory(max_turns=max_turns)
             
         elif type_ == "summary":
             from app.services.memory.summary_memory import SummaryMemory
@@ -234,12 +248,12 @@ class PipelineFactory:
                     return llm_client.llm.invoke(f"Summarize this conversation concisely:\n{text}").content
                     
                 return SummaryMemory(
-                    max_turns_before_summary=config.get("max_turns_before_summary", 5),
+                    max_turns_before_summary=max_turns_before_summary,
                     summarizer_fn=summarizer
                 )
             else:
                 return SummaryMemory(
-                    max_turns_before_summary=config.get("max_turns_before_summary", 5)
+                    max_turns_before_summary=max_turns_before_summary
                 )
                 
         return None
@@ -271,14 +285,31 @@ class PipelineFactory:
 
         retriever = PipelineFactory.create_retriever(config.get("retriever", {}), vectorstore, embedder)
 
+        retriever_cfg = config.get("retriever", {}) or {}
+
         reranker = None
         reranker_cfg = config.get("reranker")
+        if not isinstance(reranker_cfg, dict):
+            reranker_cfg = None
+
+        # Backward compatibility: older presets place reranker controls in retriever config.
+        if reranker_cfg is None and isinstance(retriever_cfg, dict):
+            if retriever_cfg.get("reranker_enabled"):
+                reranker_cfg = {
+                    "enabled": True,
+                    "provider": retriever_cfg.get("reranker_provider", "huggingface_api"),
+                    "model": retriever_cfg.get("reranker_model", "BAAI/bge-reranker-v2-m3"),
+                    "max_candidates": int(retriever_cfg.get("rerank_fetch_k", 20)),
+                    "min_candidates": int(retriever_cfg.get("min_candidates", 8)),
+                }
+
         if isinstance(reranker_cfg, dict) and reranker_cfg.get("enabled"):
             provider = reranker_cfg.get("provider", "huggingface_api")
-            model_name = reranker_cfg.get("model", "BAAI/bge-reranker-base")
+            model_name = reranker_cfg.get("model", "BAAI/bge-reranker-v2-m3")
             timeout_seconds = int(reranker_cfg.get("timeout_seconds", 10))
-            max_candidates = int(reranker_cfg.get("max_candidates", 8))
+            max_candidates = int(reranker_cfg.get("max_candidates", 20))
             max_workers = int(reranker_cfg.get("max_workers", 4))
+            min_candidates = int(reranker_cfg.get("min_candidates", 8))
 
             if provider in ("huggingface_api", "huggingface", "hf_api"):
                 from app.services.retrieval.reranker import HuggingFaceAPIReranker
@@ -287,6 +318,7 @@ class PipelineFactory:
                     timeout_seconds=timeout_seconds,
                     max_candidates=max_candidates,
                     max_workers=max_workers,
+                    min_candidates=min_candidates,
                 )
             else:
                 from app.services.retrieval.reranker import CrossEncoderReranker
@@ -302,5 +334,6 @@ class PipelineFactory:
             memory=memory,
             retriever=retriever,
             llm_client=llm_client,
-            reranker=reranker
+            reranker=reranker,
+            rerank_fetch_k=int(retriever_cfg.get("rerank_fetch_k", 20)),
         )

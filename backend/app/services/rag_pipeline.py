@@ -6,6 +6,9 @@ it no longer keeps request/user state that could leak across requests.
 
 import asyncio
 import hashlib
+import json
+import logging
+import os
 from typing import Any, Dict, List, Tuple, Optional
 
 from app.services.chunking.base import BaseChunker, Chunk
@@ -17,6 +20,16 @@ from app.services.llm.gemini_client import GeminiClient
 # Memory dependencies
 from app.services.memory.base import BaseMemory
 from app.utils.timing import PipelineTimer
+
+logger = logging.getLogger(__name__)
+
+
+def _stable_config_fingerprint(config: Dict[str, Any]) -> str:
+    try:
+        payload = json.dumps(config or {}, sort_keys=True, default=str)
+    except TypeError:
+        payload = str(config or {})
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
 class RAGPipeline:
@@ -38,6 +51,7 @@ class RAGPipeline:
         retriever: Optional[BaseRetriever] = None,
         llm_client: Optional[GeminiClient] = None,
         reranker: Optional[Any] = None,
+        rerank_fetch_k: int = 20,
     ) -> None:
         self.chunker = chunker
         self.embedder = embedder
@@ -46,17 +60,19 @@ class RAGPipeline:
         self.retriever = retriever
         self.llm_client = llm_client
         self.reranker = reranker
+        self.rerank_fetch_k = max(1, int(rerank_fetch_k))
         self.timer = PipelineTimer()
 
     def index_document(self, text: str, doc_id: str, metadata: dict) -> None:
         """Processes a document and indexes it into the vector store.
         """
         timer = PipelineTimer()
-        
+
         enriched_metadata = metadata.copy() if metadata else {}
         enriched_metadata["doc_id"] = doc_id
+        enriched_metadata["chunker_fingerprint"] = _stable_config_fingerprint(self.chunker.get_config())
         enriched_metadata["content_hash"] = hashlib.sha256(
-            text.encode("utf-8")
+            f"{enriched_metadata['chunker_fingerprint']}:{text}".encode("utf-8")
         ).hexdigest()
 
         # Check if the vectorstore already has it
@@ -98,27 +114,37 @@ class RAGPipeline:
         await asyncio.to_thread(self.index_document, text, doc_id, metadata)
 
     def index_document_with_pages(
-        self, 
-        pages: List[Dict[str, Any]], 
+        self,
+        pages: List[Dict[str, Any]],
         doc_id: str,
         base_metadata: Dict[str, Any]
     ) -> None:
         """Index a document by chunking each page independently.
-        
+
         Preserves page-level structure and metadata in chunks.
-        
+
+        P2.3: Chunking (text splitting) runs in parallel across pages, but all
+        embedding calls are batched sequentially *after* chunking to avoid
+        hammering the embedding API from multiple threads simultaneously.
+
+        P3.4: Assigns ``chunk_index_global`` to each chunk so citation UI can
+        reference chunks across the full document.
+
         Args:
             pages: List of dicts, each containing 'text' and 'metadata' keys.
             doc_id: Document identifier.
             base_metadata: Base metadata to include in all chunks.
         """
+        import logging as _logging
+        _logger = _logging.getLogger(__name__)
+        import os
+
         timer = PipelineTimer()
 
+        # Do not skip page-level indexing based on doc_id alone. Chunking config
+        # changes must be allowed to create a fresh index; add_chunks performs
+        # the safer content/config-hash dedupe after chunks are produced.
         is_indexed = False
-        if hasattr(self.vectorstore, "is_document_indexed"):
-            # Check if at least some pages are already indexed. 
-            if pages and self.vectorstore.is_document_indexed(doc_id=doc_id):
-                is_indexed = True
 
         retriever_needs_index = False
         if hasattr(self.retriever, "index"):
@@ -129,63 +155,85 @@ class RAGPipeline:
 
         if is_indexed and not retriever_needs_index:
             return
-        
-        all_chunks = []
+
+        from concurrent.futures import ThreadPoolExecutor
+
         total_pages = len(pages)
-        
-        # Process each page independently
-        for page_idx, page_dict in enumerate(pages):
+
+        def _chunk_page_text_only(args: Tuple[int, Dict[str, Any]]) -> List[Chunk]:
+            """Chunk a single page without embedding (P2.3: text-only pass)."""
+            page_idx, page_dict = args
             page_text = page_dict.get("text", "")
             page_metadata = page_dict.get("metadata", {})
-            
+
             if not page_text.strip():
-                continue
-            
-            # Create enriched metadata for this page
+                return []
+
             enriched_metadata = base_metadata.copy() if base_metadata else {}
             enriched_metadata["doc_id"] = doc_id
-            enriched_metadata.update(page_metadata)  # Include page-specific metadata
+            enriched_metadata.update(page_metadata)
+            enriched_metadata["chunker_fingerprint"] = _stable_config_fingerprint(self.chunker.get_config())
             enriched_metadata["content_hash"] = hashlib.sha256(
-                page_text.encode("utf-8")
+                f"{enriched_metadata['chunker_fingerprint']}:{page_text}".encode("utf-8")
             ).hexdigest()
-            
-            # Chunk this page independently
-            timer.start("chunking_time_ms")
-            page_chunks = self.chunker.chunk(text=page_text, metadata=enriched_metadata)
-            timer.stop("chunking_time_ms")
-            
-            # Add chunk_index to each page's chunks for sequential identification
-            for chunk_idx, chunk in enumerate(page_chunks):
-                if chunk.metadata is None:
-                    chunk.metadata = {}
-                chunk.metadata["chunk_index"] = chunk_idx
-            
-            all_chunks.extend(page_chunks)
-        
+
+            # P2.3: If the chunker supports a text-only mode (no embeddings), use it.
+            # Fall back to the normal chunk() path for non-semantic chunkers.
+            if hasattr(self.chunker, "chunk_text_only"):
+                page_chunks = self.chunker.chunk_text_only(text=page_text, metadata=enriched_metadata)
+            else:
+                page_chunks = self.chunker.chunk(text=page_text, metadata=enriched_metadata)
+
+            return page_chunks
+
+        timer.start("chunking_time_ms")
+
+        try:
+            worker_limit = int(os.environ.get("MAX_CONCURRENT_CHUNKING_WORKERS", 3))
+        except ValueError:
+            worker_limit = 3
+
+        max_workers = min(worker_limit, max(1, len(pages)))
+
+        all_chunks: List[Chunk] = []
+        # Parallelize text-only chunking over pages (no embedding calls here).
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            for page_chunks in executor.map(_chunk_page_text_only, enumerate(pages)):
+                all_chunks.extend(page_chunks)
+
+        timer.stop("chunking_time_ms")
+
         if not all_chunks:
             return
-        
-        # Index all chunks
+
+        # P3.4: Assign a sequential global chunk index across all pages.
+        for global_idx, chunk in enumerate(all_chunks):
+            if chunk.metadata is None:
+                chunk.metadata = {}
+            chunk.metadata["chunk_index_global"] = global_idx
+            # Legacy per-page index (kept for backward-compat)
+            chunk.metadata.setdefault("chunk_index", global_idx)
+
+        # Index all chunks into the sparse retriever (BM25) first.
         if hasattr(self.retriever, "index"):
             self.retriever.index(all_chunks)
-        
-        # Embed and store
+
+        # P2.3: Embed ALL chunks in a single sequential pass — one API client,
+        # one flow of batches, respecting MAX_EMBED_BATCH_SIZE (default 96).
         if not is_indexed:
             timer.start("embedding_time_ms")
             self.vectorstore.add_chunks(chunks=all_chunks, embedder=self.embedder)
             timer.stop("embedding_time_ms")
 
         self.timer = timer
-        
-        # Log success
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.info(
+
+        _logger.info(
             "Indexed document %s: %d pages, %d total chunks",
             doc_id,
             total_pages,
             len(all_chunks),
         )
+
 
     async def aindex_document_with_pages(
         self,
@@ -201,27 +249,98 @@ class RAGPipeline:
             base_metadata,
         )
 
+    def index_pdf_images(self, pdf_content: Any, filename: str, doc_id: str, base_metadata: Dict[str, Any]) -> None:
+        """Extract PDF images and index them in a sibling image vector collection.
+
+        This is intentionally opt-in because the local CLIP model may download
+        weights on first use. Enable with ``PDF_IMAGE_INDEXING_ENABLED=true``.
+        """
+        if os.getenv("PDF_IMAGE_INDEXING_ENABLED", "false").strip().lower() not in {"1", "true", "yes", "on"}:
+            return
+
+        collection_name = getattr(self.vectorstore, "collection_name", None)
+        if not collection_name:
+            logger.warning("Skipping image indexing because the vectorstore has no collection_name")
+            return
+
+        try:
+            from app.services.embedding.clip_image_embedder import CLIPImageEmbedder
+            from app.services.vectorstore.chroma_store import ChromaStore
+            from app.utils.file_processor import FileProcessor
+
+            image_store = ChromaStore(collection_name=f"{collection_name}_images")
+            if hasattr(image_store, "is_document_indexed") and image_store.is_document_indexed(doc_id=doc_id):
+                return
+
+            image_chunks = FileProcessor.extract_pdf_images(pdf_content, filename)
+            if not image_chunks:
+                logger.info("No PDF images found for document %s", doc_id)
+                return
+
+            for global_idx, chunk in enumerate(image_chunks):
+                chunk.metadata = dict(chunk.metadata or {})
+                chunk.metadata.update(base_metadata or {})
+                chunk.metadata["doc_id"] = doc_id
+                chunk.metadata["chunk_index_global"] = global_idx
+                chunk.metadata["chunk_index"] = global_idx
+                chunk.metadata["image_collection_name"] = image_store.collection_name
+
+            image_store.add_chunks(chunks=image_chunks, embedder=CLIPImageEmbedder())
+            logger.info(
+                "Indexed %d image chunk(s) for document %s into collection %s",
+                len(image_chunks),
+                doc_id,
+                image_store.collection_name,
+            )
+        except Exception as exc:
+            logger.warning("PDF image indexing failed for '%s': %s", filename, exc)
+
+    async def aindex_pdf_images(
+        self,
+        pdf_content: Any,
+        filename: str,
+        doc_id: str,
+        base_metadata: Dict[str, Any],
+    ) -> None:
+        await asyncio.to_thread(self.index_pdf_images, pdf_content, filename, doc_id, base_metadata)
+
     def retrieve(self, query: str, top_k: int = 5) -> List[Tuple[Chunk, float]]:
         """Retrieves chunks similar to the query.
         """
+        requested_top_k = max(1, int(top_k))
+        candidate_top_k = requested_top_k
+        if self.reranker:
+            candidate_top_k = max(
+                requested_top_k,
+                self.rerank_fetch_k,
+                int(getattr(self.reranker, "max_candidates", requested_top_k)),
+            )
+
         # Time the active vector retrieval separately
         self.timer.start("retrieval_time_ms")
-        
+
         if self.retriever:
-            results = self.retriever.search(query=query, top_k=top_k)
+            results = self.retriever.search(query=query, top_k=candidate_top_k)
         else:
             results = self.vectorstore.search(
-                query=query, embedder=self.embedder, top_k=top_k
+                query=query, embedder=self.embedder, top_k=candidate_top_k
             )
-            
+
         self.timer.stop("retrieval_time_ms")
-        
+
         if self.reranker:
+            min_candidates_for_rerank = max(
+                requested_top_k + 1,
+                int(getattr(self.reranker, "min_candidates", os.getenv("RERANK_MIN_CANDIDATES", "8"))),
+            )
+            if len(results) < min_candidates_for_rerank:
+                return results[:requested_top_k]
             self.timer.start("reranking_time_ms")
-            results = self.reranker.rerank(query, results, top_k)
+            results = self.reranker.rerank(query, results, requested_top_k)
             self.timer.stop("reranking_time_ms")
-            
-        return results
+            return results
+
+        return results[:requested_top_k]
 
     async def aretrieve(self, query: str, top_k: int = 5) -> List[Tuple[Chunk, float]]:
         return await asyncio.to_thread(self.retrieve, query, top_k)
@@ -229,24 +348,24 @@ class RAGPipeline:
     def generate(self, query: str, chunks: List[Any], llm_client: Optional[GeminiClient] = None) -> str:
         """Generation bridge wrapping contexts dynamically before pinging any LLM native interfaces."""
         self.timer.start("llm_time_ms")
-        
+
         target_llm = llm_client or self.llm_client
-        
+
         if target_llm:
             if self.memory and hasattr(self.memory, "get") and self.memory.get():
                 answer = target_llm.generate_with_memory(
-                    query=query, 
-                    chunks=chunks, 
+                    query=query,
+                    chunks=chunks,
                     memory=self.memory
                 )
             else:
                 answer = target_llm.generate(query=query, chunks=chunks)
         else:
             answer = f"Simulated Response to Query: [{query}]"
-        
+
         if self.memory:
             self.memory.add_interaction(query, answer)
-            
+
         self.timer.stop("llm_time_ms")
         return answer
 
@@ -296,7 +415,7 @@ class RAGPipeline:
         for chunk_text in await asyncio.to_thread(_get_iter):
             yield chunk_text
             await asyncio.sleep(0) # Yield control
-        
+
     def get_last_timings(self) -> Dict[str, float]:
         """Returns the PipelineTimer's latest metrics dict spanning strictly active pipeline schema domains natively."""
         return self.timer.to_metrics_dict()
@@ -317,5 +436,5 @@ class RAGPipeline:
             config["llm"] = self.llm_client.get_config() if hasattr(self.llm_client, "get_config") else "custom_llm"
         if getattr(self, "reranker", None):
             config["reranker"] = self.reranker.get_config() if hasattr(self.reranker, "get_config") else "custom_reranker"
-            
+
         return config

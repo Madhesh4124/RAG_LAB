@@ -36,6 +36,7 @@ export const getBestPreset = () => api.get("/api/config/best-preset");
 export const applyBestPreset = (payload) => api.post("/api/config/best-preset/apply", payload);
 
 export const prepareChatSession = (payload) => api.post("/api/chat/prepare", payload);
+export const getIndexStatus = (jobId) => api.get(`/api/documents/index-status/${jobId}`);
 
 // ── Admin ──────────────────────────────────────────────────────
 export const listChromaRoots = () => api.get("/api/admin/chroma");
@@ -50,6 +51,10 @@ export const compareConfigs = (payload) => api.post("/compare/run", payload);
 export const compareIndex = (payload) => api.post("/compare/index", payload);
 export const clearChromaDb = () => api.post("/compare/clear-chromadb");
 export const scoreMessage = (messageId) => api.post("/api/evaluation/score", { message_id: messageId });
+export const getEvaluationReport = (payload) =>
+  api.post("/api/evaluation/report", payload, {
+    timeout: payload?.deep ? 30000 : 10000,
+  });
 
 // ── MOCK DATA (delete once backend is ready) ────────────────────
 export const MOCK_CHUNKS = [

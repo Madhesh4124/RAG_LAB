@@ -1,6 +1,7 @@
 """Gemini LLM Client."""
 
 import asyncio
+import logging
 import os
 from functools import lru_cache
 from typing import Any, Dict, List
@@ -10,6 +11,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from app.services.chunking.base import Chunk
 
 load_dotenv(override=True)
+logger = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=8)
@@ -28,7 +30,8 @@ def _build_context(chunks: List[Chunk], max_chunks: int = 8, max_chars: int = 12
     parts: List[str] = []
     total = 0
     for idx, chunk in enumerate(chunks[:max_chunks], start=1):
-        text = (chunk.text or "").strip()
+        metadata = getattr(chunk, "metadata", {}) or {}
+        text = (metadata.get("window_text") or chunk.text or "").strip()
         if len(text) > 2000:
             text = text[:2000] + "..."
         segment = f"[Chunk {idx}]\n{text}"
@@ -74,12 +77,16 @@ def _content_to_text(content: Any) -> str:
         return "".join(parts)
     return str(content)
 
+def _default_llm_model() -> str:
+    return os.getenv("DEFAULT_LLM_MODEL", "gemini-2.5-flash")
+
+
 class GeminiClient:
     """Gemini Client using LangChain's ChatGoogleGenerativeAI."""
 
-    def __init__(self, model: str = "gemma-4-26b-a4b-it", temperature: float = 0.2, system_prompt: str = None):
+    def __init__(self, model: str = None, temperature: float = 0.2, system_prompt: str = None):
         self.provider = "google"
-        self.model_name = model
+        self.model_name = model or _default_llm_model()
         self.temperature = temperature
         self.system_prompt = system_prompt or (
             "You are an expert research assistant. Answer the user's question based on the provided document context below. "
@@ -90,14 +97,19 @@ class GeminiClient:
         
         api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         if not api_key:
-            import logging
-            logging.warning(
+            logger.warning(
                 "Neither GEMINI_API_KEY nor GOOGLE_API_KEY is set. "
                 "LLM features will be unavailable."
             )
             self.llm = None
             return
 
+        logger.info(
+            "Initializing Gemini LLM client model=%s temperature=%s api_key_present=%s",
+            self.model_name,
+            self.temperature,
+            bool(api_key),
+        )
         self.llm = _build_llm(self.model_name, float(self.temperature), api_key)
 
     def _format_chunks(self, chunks: List[Chunk]) -> str:

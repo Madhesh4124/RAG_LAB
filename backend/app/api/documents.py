@@ -1,6 +1,7 @@
+import os
 import uuid
 from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form, Query, status, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -10,6 +11,7 @@ from app.models.user import User
 from app.models.document import Document, DocumentListItemResponse, DocumentResponse
 from app.models.rag_config import RAGConfig
 from app.utils.file_processor import FileProcessor
+from app.services.indexing_jobs import IndexingJobStore
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
@@ -48,27 +50,66 @@ async def search_documents(
 
 @router.post("/upload", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED)
 async def upload_document(
+    request: Request,
     file: UploadFile = File(...),
     config: Optional[str] = Form(None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
+    # --- P1.1: HTTP-level body size guard ------------------------------------
+    max_bytes = int(os.getenv("MAX_UPLOAD_SIZE_MB", "50")) * 1024 * 1024
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > max_bytes:
+        limit_mb = max_bytes // (1024 * 1024)
+        raise HTTPException(
+            status_code=413,
+            detail=f"Request body exceeds the maximum allowed size of {limit_mb} MB.",
+        )
+    # -------------------------------------------------------------------------
     try:
         processed_data = await FileProcessor.process_upload(file)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-        
+
+    # --- P3.2: Content-hash deduplication ------------------------------------
+    sha256 = processed_data.get("content_sha256")
+    if sha256:
+        dup_stmt = select(Document).where(
+            Document.user_id == current_user.id,
+            Document.content_sha256 == sha256,
+        )
+        existing = (await db.execute(dup_stmt)).scalars().first()
+        if existing:
+            # Return the existing document — no re-upload, no re-index needed.
+            return existing
+    # -------------------------------------------------------------------------
+
     new_doc = Document(
         user_id=current_user.id,
         filename=processed_data["filename"],
         content=processed_data["content"],
         file_type=processed_data["file_type"],
-        file_size=processed_data["file_size"]
+        file_size=processed_data["file_size"],
+        content_sha256=sha256,
     )
     db.add(new_doc)
     await db.commit()
     await db.refresh(new_doc)
     return new_doc
+
+
+@router.get("/index-status/{job_id}")
+async def get_index_status(job_id: str, current_user: User = Depends(get_current_user)):
+    """P2.1 — Poll the status of a background indexing job.
+
+    Returns JSON with fields: job_id, status (pending|indexing|ready|failed),
+    progress_pct (0-100), error (if failed).
+    """
+    job = IndexingJobStore.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Indexing job not found")
+    return job.to_dict()
+
 
 @router.get("/{doc_id}", response_model=DocumentResponse)
 async def get_document(doc_id: uuid.UUID, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
@@ -174,3 +215,48 @@ async def delete_document(doc_id: uuid.UUID, current_user: User = Depends(get_cu
     await db.delete(doc)
     await db.commit()
     return None
+
+
+@router.post("/{doc_id}/index-tables")
+async def index_document_tables(
+    doc_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Extract tables from a stored PDF document and index them into Chroma.
+
+    Runs in background and returns a job_id for polling index status.
+    """
+    stmt = select(Document).where(Document.id == doc_id, Document.user_id == current_user.id)
+    doc = (await db.execute(stmt)).scalars().first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    if (doc.file_type or "").lower() != "pdf":
+        raise HTTPException(status_code=400, detail="Document is not a PDF")
+
+    # Create indexing job
+    job_id = IndexingJobStore.create(doc_id=str(doc_id), config_id=str(uuid.uuid4()))
+
+    def _bg_index_tables(job_id_local: str, pdf_bytes: bytes, filename: str):
+        try:
+            import tempfile
+            from app.services.table_indexer import index_pdf_tables
+
+            IndexingJobStore.update(job_id_local, status="indexing", progress_pct=0)
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=True) as tmp:
+                tmp.write(pdf_bytes)
+                tmp.flush()
+                count = index_pdf_tables(file_path=tmp.name)
+            IndexingJobStore.update(job_id_local, status="ready", progress_pct=100)
+        except Exception as exc:
+            IndexingJobStore.update(job_id_local, status="failed", error=str(exc))
+
+    # Snapshot bytes to avoid DB session usage in the background task
+    pdf_bytes = doc.content if isinstance(doc.content, (bytes, bytearray)) else doc.content.encode("utf-8")
+    background_tasks.add_task(_bg_index_tables, job_id, pdf_bytes, doc.filename)
+
+    await db.commit()
+
+    return {"status": "indexing", "job_id": job_id, "document_id": str(doc_id)}

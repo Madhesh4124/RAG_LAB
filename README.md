@@ -45,7 +45,7 @@ It includes:
   - `hybrid`
   - `mmr`
 - Reranker toggle and model selection (Hugging Face API reranker).
-- LLM selection is fixed to Gemma in UI (`gemma-4-26b-a4b-it`).
+- LLM selection is fixed to Gemini in UI (`gemini-2.5-flash` by default).
 - Memory modes:
   - `none`
   - `buffer`
@@ -163,10 +163,27 @@ python -m venv .venv
 source .venv/Scripts/activate   # Windows Git Bash
 # or .venv\Scripts\activate     # Windows PowerShell/CMD
 pip install -r requirements.txt
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --access-log --log-level info
 ```
 
 Backend default URL: `http://localhost:8000`
+
+For Docker, the backend source lives in `backend/` and the ASGI app is `app.main:app`.
+The container copies `backend` to `/app/backend` and starts from there; no `/server`
+directory is required for this project layout.
+
+Runtime logs are controlled with:
+- `LOG_LEVEL` (`info` by default)
+- `LOG_FORMAT` (`text` locally, `json` in Docker Compose)
+
+Optional PDF image indexing can be enabled with:
+- `PDF_IMAGE_INDEXING_ENABLED=true`
+- `HF_IMAGE_EMBEDDING_MODEL=openai/clip-vit-base-patch32`
+  - Alternative: `HF_IMAGE_EMBEDDING_MODEL=Qwen/Qwen3-VL-Embedding-2B` (higher quality, heavier runtime)
+
+When enabled, embedded PDF images are extracted, saved under `UPLOAD_DIR`,
+embedded with a local Hugging Face CLIP model, and stored in a sibling Chroma
+collection named `<text_collection>_images`.
 
 ### 2) Frontend
 

@@ -14,7 +14,7 @@ function formatScore(value) {
   return num.toFixed(4);
 }
 
-export default function ResultCard({ result }) {
+export default function ResultCard({ result, onOpenEvaluation }) {
   const [expandedChunks, setExpandedChunks] = useState({});
 
   const toggleChunk = (index) => {
@@ -55,6 +55,16 @@ export default function ResultCard({ result }) {
             <p className="text-[10px] uppercase tracking-wide text-gray-400">📦 Chunks</p>
             <p className="font-mono text-gray-800">{result.chunk_count}</p>
           </div>
+        </section>
+
+        <section className="flex justify-end">
+          <button
+            type="button"
+            onClick={() => onOpenEvaluation?.(result)}
+            className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
+          >
+            Evaluation
+          </button>
         </section>
 
         <section>

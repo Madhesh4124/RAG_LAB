@@ -30,7 +30,8 @@ class CrossEncoderReranker:
         # Create pairs: (query, chunk text)
         pairs = []
         for chunk, original_score in results:
-            text = chunk.text if hasattr(chunk, "text") else getattr(chunk, "page_content", str(chunk))
+            metadata = getattr(chunk, "metadata", {}) or {}
+            text = metadata.get("window_text") or (chunk.text if hasattr(chunk, "text") else getattr(chunk, "page_content", str(chunk)))
             pairs.append((query, text))
 
         # Predict scores
@@ -58,15 +59,17 @@ class HuggingFaceAPIReranker:
 
     def __init__(
         self,
-        model: str = "BAAI/bge-reranker-base",
+        model: str = "BAAI/bge-reranker-v2-m3",
         timeout_seconds: int = 10,
-        max_candidates: int = 8,
+        max_candidates: int = 20,
         max_workers: int = 4,
+        min_candidates: int = 8,
     ):
         self.model_name = model
         self.timeout_seconds = timeout_seconds
         self.max_candidates = max(1, int(max_candidates))
         self.max_workers = max(1, int(max_workers))
+        self.min_candidates = max(2, int(min_candidates))
         self.api_key = os.getenv("HUGGINGFACE_API_KEY")
         self.endpoint = f"https://router.huggingface.co/hf-inference/models/{self.model_name}"
         self.session = requests.Session()
@@ -177,7 +180,8 @@ class HuggingFaceAPIReranker:
             candidates = results[:candidate_count]
 
             texts = [
-                chunk.text if hasattr(chunk, "text") else getattr(chunk, "page_content", str(chunk))
+                (getattr(chunk, "metadata", {}) or {}).get("window_text")
+                or (chunk.text if hasattr(chunk, "text") else getattr(chunk, "page_content", str(chunk)))
                 for chunk, _ in candidates
             ]
 
@@ -221,4 +225,5 @@ class HuggingFaceAPIReranker:
             "timeout_seconds": self.timeout_seconds,
             "max_candidates": self.max_candidates,
             "max_workers": self.max_workers,
+            "min_candidates": self.min_candidates,
         }

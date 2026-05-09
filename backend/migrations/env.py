@@ -2,6 +2,7 @@ import asyncio
 from logging.config import fileConfig
 
 from sqlalchemy import pool
+from sqlalchemy.engine import make_url
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
@@ -28,7 +29,21 @@ from app.models.metrics import Metrics
 # access to the values within the .ini file in use.
 config = context.config
 
-db_url = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./rag_lab.db")
+def _resolve_async_db_url() -> str:
+    db_url = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./rag_lab.db")
+    url = make_url(db_url)
+    drivername = url.drivername.lower()
+
+    if drivername.startswith("sqlite") and "+aiosqlite" not in drivername:
+        return url.set(drivername="sqlite+aiosqlite").render_as_string(hide_password=False)
+
+    if drivername.startswith("postgresql") and "+asyncpg" not in drivername:
+        return url.set(drivername="postgresql+asyncpg").render_as_string(hide_password=False)
+
+    return db_url
+
+
+db_url = _resolve_async_db_url()
 config.set_main_option("sqlalchemy.url", db_url)
 
 # Interpret the config file for Python logging.

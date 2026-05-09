@@ -1,9 +1,11 @@
 #!/bin/sh
 set -e
 
-# Ensure the DB directory exists and is writable by the app user
-DB_DIR="${CHROMA_PERSIST_DIR:-/app/backend}"
-mkdir -p "$DB_DIR"
+# Resolve a writable persist directory for SQLite/Chroma files.
+FALLBACK_DB_DIR="/app/backend/chroma_data"
+DB_DIR="${CHROMA_PERSIST_DIR:-$FALLBACK_DB_DIR}"
+
+mkdir -p "$DB_DIR" || true
 
 # On HF Spaces mounted volumes (for example /data), chown can be forbidden.
 # Only try it as root, and never fail startup if ownership cannot be changed.
@@ -12,8 +14,23 @@ if [ "$(id -u)" -eq 0 ]; then
 fi
 
 if [ ! -w "$DB_DIR" ]; then
-  echo "[WARN] $DB_DIR is not writable by uid $(id -u). Startup may fail if SQLite writes are needed."
+  echo "[WARN] $DB_DIR is not writable by uid $(id -u). Falling back to $FALLBACK_DB_DIR"
+  DB_DIR="$FALLBACK_DB_DIR"
+  mkdir -p "$DB_DIR"
 fi
+
+export CHROMA_PERSIST_DIR="$DB_DIR"
+
+# Force SQLite deployments to use an async, writable DB URL.
+# Keep non-SQLite URLs (for example PostgreSQL) unchanged.
+case "${DATABASE_URL:-}" in
+  "")
+    export DATABASE_URL="sqlite+aiosqlite:///$CHROMA_PERSIST_DIR/rag_lab.db"
+    ;;
+  sqlite://*|sqlite+aiosqlite://*)
+    export DATABASE_URL="sqlite+aiosqlite:///$CHROMA_PERSIST_DIR/rag_lab.db"
+    ;;
+esac
 
 # Run Alembic migrations (async-enabled env.py handles aiosqlite)
 alembic upgrade head

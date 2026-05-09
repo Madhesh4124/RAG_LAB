@@ -3,6 +3,7 @@ import uuid
 
 from sqlalchemy import inspect, select, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
+from sqlalchemy.exc import IntegrityError
 
 from app.models.evaluation import EvaluationResult
 from app.models.user import User
@@ -95,7 +96,18 @@ async def _seed_admin_user(db: AsyncSession) -> User:
         is_admin=True,
     )
     db.add(user)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        result = await db.execute(select(User).where(User.username == username))
+        user = result.scalars().first()
+        if user is None:
+            raise
+        if not user.is_admin:
+            user.is_admin = True
+            db.add(user)
+            await db.commit()
     await db.refresh(user)
     return user
 
@@ -124,7 +136,18 @@ async def _seed_sample_user(db: AsyncSession) -> User:
         is_admin=False,
     )
     db.add(user)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        result = await db.execute(select(User).where(User.username == username))
+        user = result.scalars().first()
+        if user is None:
+            raise
+        if user.is_admin:
+            user.is_admin = False
+            db.add(user)
+            await db.commit()
     await db.refresh(user)
     return user
 

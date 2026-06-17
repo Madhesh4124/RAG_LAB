@@ -1,3 +1,4 @@
+import datetime
 import pytest
 from app.services.chunking.base import Chunk
 from app.services.evaluation.answer_relevancy import AnswerRelevancyEvaluator
@@ -6,7 +7,11 @@ from app.services.evaluation.faithfulness import FaithfulnessEvaluator
 from app.services.evaluation.retrieval_metrics import (
     _parse_bool_list,
     build_retrieval_metrics_report,
+    unified_deep_evaluation,
 )
+from app.models.chat import ChatMessage
+from app.services.pipeline_factory import PipelineFactory
+from app.api.evaluation import build_message_evaluation_report, EvaluationServiceUnavailableError
 
 
 def test_retrieval_report_preserves_scores_from_payload_dicts():
@@ -85,7 +90,6 @@ def test_unified_deep_evaluation_parses_json():
         def __init__(self):
             self.llm = MockLLM()
 
-    from app.services.evaluation.retrieval_metrics import unified_deep_evaluation
     result = unified_deep_evaluation(
         query="test query",
         answer="test answer",
@@ -124,7 +128,6 @@ def test_unified_deep_evaluation_strips_markdown():
         def __init__(self):
             self.llm = MockLLM()
 
-    from app.services.evaluation.retrieval_metrics import unified_deep_evaluation
     result = unified_deep_evaluation(
         query="test query",
         answer="test answer",
@@ -142,9 +145,6 @@ async def test_build_message_evaluation_report_raises_429(async_db_session, user
     cfg, msg = sample_config_and_chat
 
     # Insert a user query so that we have an associated user message
-    from app.models.chat import ChatMessage
-    import datetime
-    
     user_msg = ChatMessage(
         user_id=user_a.id,
         document_id=msg.document_id,
@@ -164,7 +164,6 @@ async def test_build_message_evaluation_report_raises_429(async_db_session, user
         async def aretrieve(self, query, top_k):
             return []
 
-    from app.services.pipeline_factory import PipelineFactory
     monkeypatch.setattr(PipelineFactory, "create_pipeline", lambda cfg: MockPipeline())
 
     # Mock unified_deep_evaluation to raise a 429 error
@@ -173,8 +172,6 @@ async def test_build_message_evaluation_report_raises_429(async_db_session, user
 
     monkeypatch.setattr("app.api.evaluation.unified_deep_evaluation", mock_unified)
 
-    from app.api.evaluation import build_message_evaluation_report, EvaluationServiceUnavailableError
-    
     with pytest.raises(EvaluationServiceUnavailableError) as exc_info:
         await build_message_evaluation_report(
             db=async_db_session,

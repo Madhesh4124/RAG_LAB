@@ -1,12 +1,4 @@
-import io
-import tempfile
-import uuid
-
 import pytest
-
-from fastapi.testclient import TestClient
-
-from app.main import app
 
 
 @pytest.fixture(autouse=True)
@@ -28,9 +20,24 @@ def _no_external_chroma(monkeypatch):
 
 
 def test_index_tables_endpoint(tmp_path, monkeypatch):
-    client = TestClient(app)
+    class MockPage:
+        page_number = 1
+        def find_tables(self):
+            return []
+        def extract_tables(self):
+            return []
 
-    pdf_content = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+    class MockPDF:
+        def __init__(self, file_path):
+            self.pages = [MockPage()]
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    monkeypatch.setattr("pdfplumber.open", MockPDF)
+
+    pdf_content = b"%PDF-fake"
     t_pdf = tmp_path / "t.pdf"
     t_pdf.write_bytes(pdf_content)
 
@@ -41,3 +48,4 @@ def test_index_tables_endpoint(tmp_path, monkeypatch):
     count = index_pdf_tables(file_path=str(t_pdf))
     # No tables in minimal file, expect 0
     assert count == 0
+

@@ -221,6 +221,11 @@ class PipelineFactory:
                 model = None
             temperature = config.get("temperature", 0.2)
             return GeminiClient(model=model, temperature=temperature)
+        elif provider == "groq":
+            from app.services.llm.groq_client import GroqClient
+            model = config.get("model")
+            temperature = config.get("temperature", 0.2)
+            return GroqClient(model=model, temperature=temperature)
             
         return None
 

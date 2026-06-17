@@ -45,7 +45,7 @@ It includes:
   - `hybrid`
   - `mmr`
 - Reranker toggle and model selection (Hugging Face API reranker).
-- LLM selection is fixed to Gemini in UI (`gemini-2.5-flash` by default).
+- LLM selection uses Groq by default (`llama-3.3-70b-versatile`).
 - Memory modes:
   - `none`
   - `buffer`
@@ -60,6 +60,26 @@ It includes:
 - Stores user/assistant messages.
 - Stores timing/quality metrics per assistant message.
 - System reset endpoint to clear cache/history/vector storage.
+
+### Evaluation Metrics
+RAG Lab provides a comprehensive suite of metrics for both retrieval quality and LLM answer generation quality, including both fast statistical metrics and deep LLM-as-a-judge evaluations.
+
+**Retrieval Metrics (Statistical)**
+- **Precision@K**: The proportion of retrieved chunks in the top K that are actually relevant.
+- **Recall@K**: The proportion of all relevant chunks that were successfully retrieved.
+- **Hit Rate@K**: 1.0 if at least one relevant chunk was retrieved in the top K, 0.0 otherwise.
+- **Reciprocal Rank (MRR)**: The reciprocal of the rank of the first relevant chunk (1/rank).
+- **Average Precision**: The average of precision scores at each rank where a relevant chunk is found.
+- **nDCG@K (Normalized Discounted Cumulative Gain)**: Measures ranking quality, penalizing relevant chunks that appear lower in the results.
+- **Avg Similarity**: The mean similarity score of the retrieved chunks returned by the embedder.
+- **Diversity**: A measure of how distinct the retrieved chunks are from one another. Higher means less redundant chunks.
+- **MMR Lambda**: The lambda parameter used during Maximal Marginal Relevance retrieval, balancing relevance vs. diversity.
+
+**Answer Quality Metrics (LLM-as-a-judge)**
+- **Faithfulness**: Measures how factually accurate the generated answer is based strictly on the retrieved context (identifies hallucinations).
+- **Answer Relevancy**: Measures how well the generated answer addresses the user's original query, penalizing redundant or incomplete answers.
+- **Context Precision**: Evaluates whether the most relevant chunks were ranked at the very top of the retrieved context.
+- **Context Recall**: Evaluates whether the retrieved context contained all the necessary information required to answer the query.
 
 ### Compare mode
 - Uses dedicated compare module endpoints (`/compare/index`, `/compare/run`, `/compare/clear-chromadb`).
@@ -138,7 +158,7 @@ Set only what you need for selected providers/features.
 - `CHROMA_PERSIST_DIR` (optional)
 
 ### LLM
-- `GOOGLE_API_KEY` or `GEMINI_API_KEY` (Gemma via Google GenAI)
+- `GROQ_API_KEY` (Llama 3.3 via Groq)
 
 ### Embeddings
 - `NVIDIA_API_KEY` (NVIDIA embeddings)
@@ -229,7 +249,7 @@ When rate limit is exceeded, users receive a `429 Too Many Requests` error and m
 - SQLAlchemy
 - Chroma
 - LangChain ecosystem components
-- Google GenAI integration
+- Groq LLM integration
 
 ### Frontend
 - React

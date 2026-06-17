@@ -5,6 +5,7 @@ Takes configuration dictionaries and dynamically initializes
 the concrete implementations for chunking, embedding, and vector storage.
 """
 
+import os
 from typing import Any, Dict, Optional
 
 from app.services.chunking.base import BaseChunker
@@ -214,14 +215,13 @@ class PipelineFactory:
             return None
 
         provider = config.get("provider") or ("gemini" if config.get("model") else None)
-        if provider == "gemini":
-            from app.services.llm.gemini_client import GeminiClient
-            model = config.get("model")
-            if model in ("gemma-4-26b-a4b-it", "gemma-4-27b-it"):
-                model = None
-            temperature = config.get("temperature", 0.2)
-            return GeminiClient(model=model, temperature=temperature)
-        elif provider == "groq":
+        
+        # Force migration from gemini to groq
+        if provider == "gemini" or not provider:
+            provider = os.getenv("DEFAULT_LLM_PROVIDER", "groq")
+            config["model"] = os.getenv("DEFAULT_LLM_MODEL", "llama-3.3-70b-versatile")
+        
+        if provider == "groq":
             from app.services.llm.groq_client import GroqClient
             model = config.get("model")
             temperature = config.get("temperature", 0.2)

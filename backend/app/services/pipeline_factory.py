@@ -217,7 +217,7 @@ class PipelineFactory:
         if provider == "gemini":
             from app.services.llm.gemini_client import GeminiClient
             model = config.get("model")
-            if model == "gemma-4-26b-a4b-it":
+            if model in ("gemma-4-26b-a4b-it", "gemma-4-27b-it"):
                 model = None
             temperature = config.get("temperature", 0.2)
             return GeminiClient(model=model, temperature=temperature)

@@ -29,8 +29,9 @@ def _get_cached_compare_llm(model: str, api_key: str) -> ChatGoogleGenerativeAI:
     if cached is not None:
         return cached
 
+    actual_model = "gemini-2.5-flash" if model in ("gemma-4-27b-it", "gemma-4-26b-a4b-it") else model
     llm = ChatGoogleGenerativeAI(
-        model=model,
+        model=actual_model,
         temperature=0,
         google_api_key=api_key,
     )
@@ -131,7 +132,7 @@ async def run_single_config(
     if not api_key:
         raise ValueError("GEMINI_API_KEY/GOOGLE_API_KEY is not set.")
 
-    llm = _get_cached_compare_llm(model="gemini-2.5-flash", api_key=api_key)
+    llm = _get_cached_compare_llm(model="gemma-4-27b-it", api_key=api_key)
 
     if query_mode == "global":
         summary, fallback_results, fallback_chunks = await _summarize_compare_context(

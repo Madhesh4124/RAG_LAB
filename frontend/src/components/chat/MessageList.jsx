@@ -67,10 +67,10 @@ export default function MessageList({ messages }) {
                     : "text-gray-400";
                   const scoreLabel =
                     score === null ? "score unavailable"
-                    : `${(score * 100).toFixed(1)} retrieval score`;
+                    : `${(score * 100).toFixed(1)} similarity`;
                   const rawScoreLabel =
                     rawScore === null || rawScore === score ? null
-                    : `raw ${(rawScore * 100).toFixed(1)}`;
+                    : `raw similarity ${(rawScore * 100).toFixed(1)}`;
                   return (
                     <div key={j} className="rounded-lg bg-gray-50 border border-gray-200 px-3 py-2 hover:border-blue-200 transition-colors">
                       <div className="flex justify-between items-center mb-1">

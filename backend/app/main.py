@@ -303,3 +303,4 @@ async def health_ready():
     all_ok = all(v == "ok" for v in checks.values())
     status_code = status.HTTP_200_OK if all_ok else status.HTTP_503_SERVICE_UNAVAILABLE
     return JSONResponse(status_code=status_code, content={"status": "ready" if all_ok else "degraded", "checks": checks})
+# API Key Updated reload trigger v3

@@ -4,21 +4,24 @@ import asyncio
 import logging
 import os
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, Dict, List
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from app.services.chunking.base import Chunk
 
-load_dotenv(override=True)
+env_path = Path(__file__).resolve().parents[3] / ".env"
+load_dotenv(dotenv_path=env_path, override=True)
 logger = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=8)
 def _build_llm(model_name: str, temperature: float, api_key: str) -> ChatGoogleGenerativeAI:
     max_output_tokens = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "1024"))
+    actual_model = "gemini-2.5-flash" if model_name in ("gemma-4-27b-it", "gemma-4-26b-a4b-it") else model_name
     return ChatGoogleGenerativeAI(
-        model=model_name,
+        model=actual_model,
         temperature=temperature,
         google_api_key=api_key,
         max_output_tokens=max_output_tokens,
@@ -78,7 +81,7 @@ def _content_to_text(content: Any) -> str:
     return str(content)
 
 def _default_llm_model() -> str:
-    return os.getenv("DEFAULT_LLM_MODEL", "gemini-2.5-flash")
+    return os.getenv("DEFAULT_LLM_MODEL", "gemma-4-27b-it")
 
 
 class GeminiClient:
@@ -105,10 +108,11 @@ class GeminiClient:
             return
 
         logger.info(
-            "Initializing Gemini LLM client model=%s temperature=%s api_key_present=%s",
+            "Initializing Gemini LLM client model=%s temperature=%s api_key_present=%s key_prefix=%s",
             self.model_name,
             self.temperature,
             bool(api_key),
+            api_key[:12] if api_key else "None",
         )
         self.llm = _build_llm(self.model_name, float(self.temperature), api_key)
 

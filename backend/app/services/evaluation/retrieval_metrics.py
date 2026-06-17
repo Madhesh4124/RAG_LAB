@@ -1,7 +1,10 @@
 import json
+import logging
 import math
 import re
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 from app.services.chunking.base import Chunk
 
@@ -26,12 +29,13 @@ def _chunk_score(chunk: Any) -> float:
             pass
     if hasattr(chunk, "metadata") and isinstance(getattr(chunk, "metadata"), dict):
         try:
-            return float(getattr(chunk, "metadata").get("score", 0.0))
+            metadata = getattr(chunk, "metadata")
+            return float(metadata.get("score", metadata.get("raw_score", 0.0)))
         except (TypeError, ValueError):
             return 0.0
     if isinstance(chunk, dict):
         try:
-            return float(chunk.get("score", 0.0))
+            return float(chunk.get("score", chunk.get("raw_score", 0.0)))
         except (TypeError, ValueError):
             return 0.0
     return 0.0
@@ -46,7 +50,11 @@ def _chunk_metadata(chunk: Any) -> Dict[str, Any]:
 
 
 def _normalize_chunk(chunk: Any) -> Chunk:
-    return Chunk(text=_chunk_text(chunk), metadata=_chunk_metadata(chunk))
+    metadata = dict(_chunk_metadata(chunk))
+    score = _chunk_score(chunk)
+    if score:
+        metadata.setdefault("score", score)
+    return Chunk(text=_chunk_text(chunk), metadata=metadata)
 
 
 def _tokenize(text: str) -> set[str]:
@@ -70,7 +78,14 @@ def _parse_bool_list(raw_text: str, expected_len: int) -> Optional[List[bool]]:
     if not isinstance(payload, list):
         return None
 
-    values = [bool(item) for item in payload[:expected_len]]
+    values = []
+    for item in payload[:expected_len]:
+        if isinstance(item, bool):
+            values.append(item)
+        elif isinstance(item, str):
+            values.append(item.strip().lower() in {"true", "yes", "1"})
+        else:
+            values.append(bool(item))
     if len(values) < expected_len:
         values.extend([False] * (expected_len - len(values)))
     return values
@@ -164,13 +179,22 @@ def build_retrieval_metrics_report(
     embedder: Any = None,
     retrieval_config: Optional[Dict[str, Any]] = None,
     query_mode: Optional[str] = None,
+    precomputed_retrieved_flags: Optional[List[bool]] = None,
+    precomputed_candidate_flags: Optional[List[bool]] = None,
 ) -> Dict[str, Any]:
     retrieval_config = retrieval_config or {}
     normalized_retrieved = [_normalize_chunk(chunk) for chunk in retrieved_chunks]
     normalized_candidates = [_normalize_chunk(chunk) for chunk in (candidate_chunks or retrieved_chunks)]
 
-    retrieved_flags = judge_chunk_relevance(query, normalized_retrieved, llm_client=llm_client)
-    candidate_flags = judge_chunk_relevance(query, normalized_candidates, llm_client=llm_client)
+    if precomputed_retrieved_flags is not None:
+        retrieved_flags = precomputed_retrieved_flags
+    else:
+        retrieved_flags = judge_chunk_relevance(query, normalized_retrieved, llm_client=llm_client)
+
+    if precomputed_candidate_flags is not None:
+        candidate_flags = precomputed_candidate_flags
+    else:
+        candidate_flags = judge_chunk_relevance(query, normalized_candidates, llm_client=llm_client)
 
     k = len(normalized_retrieved)
     relevant_retrieved = sum(1 for flag in retrieved_flags if flag)
@@ -249,4 +273,93 @@ def build_retrieval_metrics_report(
             "recall_basis": "Recall@k is estimated against a judged candidate pool rather than a labeled benchmark set.",
             "relevance_judging": "Chunk relevance uses the configured LLM when available, otherwise a lexical fallback heuristic.",
         },
+    }
+
+
+def unified_deep_evaluation(
+    query: str,
+    answer: str,
+    retrieved_chunks: List[Any],
+    candidate_chunks: List[Any],
+    llm_client: Any,
+) -> Dict[str, Any]:
+    if llm_client is None or getattr(llm_client, "llm", None) is None:
+        raise ValueError("LLM client is not available for unified evaluation.")
+
+    # Format the retrieved chunks
+    retrieved_texts = [
+        f"[{idx + 1}] {_chunk_text(c)}" for idx, c in enumerate(retrieved_chunks)
+    ]
+    retrieved_formatted = "\n\n".join(retrieved_texts)
+
+    # Format the candidate chunks
+    candidate_texts = [
+        f"[{idx + 1}] {_chunk_text(c)}" for idx, c in enumerate(candidate_chunks)
+    ]
+    candidate_formatted = "\n\n".join(candidate_texts)
+
+    prompt = (
+        "You are an expert RAG system evaluator. Analyze the user query, retrieve chunks, candidate chunks, and generated answer below to perform a unified evaluation.\n\n"
+        "=== INPUTS ===\n"
+        f"User Query: {query}\n\n"
+        f"Generated Answer: {answer}\n\n"
+        f"Retrieved Chunks (Total: {len(retrieved_chunks)}):\n{retrieved_formatted}\n\n"
+        f"Candidate Chunks (Total: {len(candidate_chunks)}):\n{candidate_formatted}\n\n"
+        "=== TASK ===\n"
+        "Evaluate the RAG system performance across the following dimensions. You MUST return ONLY a raw JSON object matching the exact schema below.\n"
+        "Return JSON only, do not output markdown formatting like ```json or anything else. Your output must be a parsable JSON string.\n\n"
+        "JSON SCHEMA:\n"
+        "{\n"
+        "  \"retrieved_relevance\": [list of booleans, one per retrieved chunk, indicating if it is relevant to the query],\n"
+        "  \"candidate_relevance\": [list of booleans, one per candidate chunk, indicating if it is relevant to the query],\n"
+        "  \"faithfulness\": [float 0.0 to 1.0: Rate how faithful the generated answer is to ONLY the retrieved chunks. 1.0 means fully grounded and 0.0 means contains information not in the chunks.],\n"
+        "  \"answer_relevancy\": [float 0.0 to 1.0: Rate how well the generated answer addresses the question. 1.0 means perfectly addresses it, 0.0 means completely irrelevant.],\n"
+        "  \"context_recall\": [float 0.0 to 1.0: Rate if the retrieved chunks fully cover the context required to answer the query. 1.0 means they cover everything, 0.0 means they miss important context.]\n"
+        "}\n"
+    )
+
+    response = llm_client.llm.invoke(prompt)
+    content = str(getattr(response, "content", "")).strip()
+
+    # Parse JSON output
+    try:
+        # Strip code block decorators if any
+        if content.startswith("```"):
+            cleaned = content.strip("`").strip()
+            if cleaned.startswith("json"):
+                cleaned = cleaned[4:].strip()
+            data = json.loads(cleaned)
+        else:
+            data = json.loads(content)
+    except Exception as e:
+        logger.warning("Failed to parse JSON response from unified evaluator: %s. Output was: %s", e, content)
+        data = {}
+
+    # Extract & validate lists of booleans
+    retrieved_flags = data.get("retrieved_relevance")
+    if not isinstance(retrieved_flags, list) or len(retrieved_flags) != len(retrieved_chunks):
+        retrieved_flags = _heuristic_relevance(query, retrieved_chunks)
+
+    candidate_flags = data.get("candidate_relevance")
+    if not isinstance(candidate_flags, list) or len(candidate_flags) != len(candidate_chunks):
+        candidate_flags = _heuristic_relevance(query, candidate_chunks)
+
+    # Cast to booleans
+    retrieved_flags = [bool(f) for f in retrieved_flags]
+    candidate_flags = [bool(f) for f in candidate_flags]
+
+    # Helper to parse floats safely
+    def get_float(key, default=0.5):
+        val = data.get(key)
+        try:
+            return max(0.0, min(1.0, float(val)))
+        except (TypeError, ValueError):
+            return default
+
+    return {
+        "retrieved_flags": retrieved_flags,
+        "candidate_flags": candidate_flags,
+        "faithfulness": get_float("faithfulness", 0.0),
+        "answer_relevancy": get_float("answer_relevancy", 0.0),
+        "context_recall": get_float("context_recall", 0.0),
     }

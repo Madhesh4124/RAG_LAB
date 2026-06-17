@@ -11,7 +11,7 @@ _INTENT = Literal["global", "local"]
 
 def _get_classifier_client() -> GeminiClient | None:
     # Separate model/env so intent routing can be tuned independently.
-    model = os.getenv("QUERY_CLASSIFIER_MODEL", os.getenv("DEFAULT_LLM_MODEL", "gemini-2.5-flash"))
+    model = os.getenv("QUERY_CLASSIFIER_MODEL", os.getenv("DEFAULT_LLM_MODEL", "gemma-4-27b-it"))
     try:
         client = GeminiClient(
             model=model,

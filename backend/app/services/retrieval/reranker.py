@@ -94,6 +94,10 @@ class HuggingFaceAPIReranker:
                     return float(value)
 
         if isinstance(item, list) and item:
+            # Check if it's a nested list like [[{"score": 0.9}]]
+            if isinstance(item[0], list):
+                return HuggingFaceAPIReranker._extract_score(item[0])
+                
             # Some endpoints return a list of label-score objects.
             dict_scores = [
                 float(entry.get("score"))

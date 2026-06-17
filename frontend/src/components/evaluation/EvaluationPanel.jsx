@@ -24,6 +24,11 @@ function MetricCard({ label, value, hint }) {
   );
 }
 
+function formatReportMode(report, fastMode) {
+  if (!report) return "";
+  return fastMode ? "Fast score-only report" : "Deep judged report";
+}
+
 export default function EvaluationPanel({ open, onClose, title, report, loading, error, selector, onRunDeepEvaluation, deepLoading = false }) {
   if (!open) return null;
 
@@ -32,6 +37,7 @@ export default function EvaluationPanel({ open, onClose, title, report, loading,
   const judgments = Array.isArray(report?.chunk_judgments) ? report.chunk_judgments : [];
   const timingMs = Number(report?.timing_ms);
   const fastMode = report?.mode === "message-fast";
+  const judgedMode = report && !fastMode;
   const queryMode = report?.query_mode || "unknown";
   const summaryMode = Boolean(report?.summary_mode);
 
@@ -43,7 +49,7 @@ export default function EvaluationPanel({ open, onClose, title, report, loading,
             <div>
               <h2 className="text-lg font-semibold text-gray-900">{title || "Evaluation"}</h2>
               <p className="mt-1 text-sm text-gray-500">
-                Retrieval metrics stay hidden until you open this panel.
+                Click "Run Evaluation" to generate retrieval and answer metrics.
               </p>
               {report ? (
                 <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
@@ -51,7 +57,7 @@ export default function EvaluationPanel({ open, onClose, title, report, loading,
                     {summaryMode ? "Summary mode" : "Retrieval mode"}
                   </span>
                   <span className="text-gray-400">
-                    {fastMode ? "Fast report" : "Detailed report"}{Number.isFinite(timingMs) ? ` in ${timingMs.toFixed(0)}ms` : ""}
+                    {formatReportMode(report, fastMode)}{Number.isFinite(timingMs) ? ` in ${timingMs.toFixed(0)}ms` : ""}
                   </span>
                   <span className="text-gray-400">query routing: {queryMode}</span>
                 </div>
@@ -65,7 +71,7 @@ export default function EvaluationPanel({ open, onClose, title, report, loading,
                   disabled={deepLoading}
                   className="rounded-lg border border-gray-200 px-3 py-1.5 text-sm text-gray-600 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {deepLoading ? "Running..." : "Run Deep Evaluation"}
+                  {deepLoading ? "Running..." : "Run Evaluation"}
                 </button>
               ) : null}
               <button
@@ -93,6 +99,12 @@ export default function EvaluationPanel({ open, onClose, title, report, loading,
             </div>
           ) : null}
 
+          {!loading && !error && !report ? (
+            <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 px-4 py-8 text-center text-sm text-gray-400">
+              No evaluation report generated yet. Click "Run Evaluation" above to compute the metrics.
+            </div>
+          ) : null}
+
           {!loading && !error && report ? (
             <>
               <section className="space-y-3">
@@ -102,18 +114,18 @@ export default function EvaluationPanel({ open, onClose, title, report, loading,
                     {summaryMode
                       ? "This turn was routed to summary mode, so these metrics only reflect how well the saved context supported a document overview."
                       : fastMode
-                      ? "Fast mode uses saved retrieved chunks and cached answer scores for a quick health check."
-                      : "`recall@k` is estimated against a judged candidate pool, not a hand-labeled benchmark set."}
+                      ? "Fast mode shows saved similarity scores. Run deep evaluation for LLM-judged relevance."
+                      : "Deep mode uses LLM chunk judgments. Similarity score and judged relevance can disagree."}
                   </p>
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                  <MetricCard label="Precision@K" value={retrieval.precision_at_k} />
-                  <MetricCard label="Recall@K" value={retrieval.recall_at_k} />
-                  <MetricCard label="Hit Rate@K" value={retrieval.hit_rate_at_k} />
-                  <MetricCard label="Reciprocal Rank" value={retrieval.reciprocal_rank} hint="MRR for a single query turn." />
-                  <MetricCard label="Average Precision" value={retrieval.average_precision} />
-                  <MetricCard label="nDCG@K" value={retrieval.ndcg_at_k} />
-                  <MetricCard label="Avg Similarity" value={retrieval.avg_similarity} />
+                  <MetricCard label="Precision@K" value={judgedMode ? retrieval.precision_at_k : null} hint={fastMode ? "Run deep evaluation for judged relevance." : null} />
+                  <MetricCard label="Recall@K" value={judgedMode ? retrieval.recall_at_k : null} hint={fastMode ? "Run deep evaluation for judged relevance." : null} />
+                  <MetricCard label="Hit Rate@K" value={judgedMode ? retrieval.hit_rate_at_k : null} hint={fastMode ? "Run deep evaluation for judged relevance." : null} />
+                  <MetricCard label="Reciprocal Rank" value={judgedMode ? retrieval.reciprocal_rank : null} hint={fastMode ? "Run deep evaluation for judged relevance." : "MRR for a single query turn."} />
+                  <MetricCard label="Average Precision" value={judgedMode ? retrieval.average_precision : null} hint={fastMode ? "Run deep evaluation for judged relevance." : null} />
+                  <MetricCard label="nDCG@K" value={judgedMode ? retrieval.ndcg_at_k : null} hint={fastMode ? "Run deep evaluation for judged relevance." : null} />
+                  <MetricCard label="Avg Similarity" value={retrieval.avg_similarity} hint="Mean retriever similarity, not a relevance verdict." />
                   <MetricCard label="Diversity" value={retrieval.diversity_score} hint="Higher means less redundant chunks." />
                   <MetricCard label="MMR Lambda" value={retrieval.mmr_lambda} hint={retrieval.retrieval_strategy === "mmr" ? "Active MMR tradeoff value." : "Shown when the retriever uses MMR."} />
                 </div>
@@ -139,12 +151,16 @@ export default function EvaluationPanel({ open, onClose, title, report, loading,
                   <div>
                     <h3 className="text-sm font-semibold text-gray-900">Chunk Judgments</h3>
                     <p className="text-xs text-gray-500">
-                      Relevant retrieved chunks: {retrieval.relevant_retrieved ?? 0} / {retrieval.evaluated_k ?? 0}
+                      {judgedMode
+                        ? `LLM-judged relevant chunks: ${retrieval.relevant_retrieved ?? 0} / ${retrieval.evaluated_k ?? 0}`
+                        : "Similarity scores only. Run deep evaluation for relevance judgments."}
                     </p>
                   </div>
-                  <p className="text-xs text-gray-400">
-                    Candidate pool: {retrieval.candidate_pool_size ?? 0}
-                  </p>
+                  {judgedMode ? (
+                    <p className="text-xs text-gray-400">
+                      Candidate pool: {retrieval.candidate_pool_size ?? 0}
+                    </p>
+                  ) : null}
                 </div>
                 <div className="space-y-3">
                   {judgments.map((item) => (
@@ -152,11 +168,11 @@ export default function EvaluationPanel({ open, onClose, title, report, loading,
                       <div className="mb-2 flex items-center justify-between gap-3">
                         <div className="flex items-center gap-2">
                           <span className="text-xs font-mono text-gray-400">#{item.rank}</span>
-                          <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${item.relevant ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}>
-                            {item.relevant ? "Relevant" : "Not relevant"}
+                          <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${judgedMode ? (item.relevant ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700") : "bg-gray-100 text-gray-500"}`}>
+                            {judgedMode ? (item.relevant ? "Judge: relevant" : "Judge: not relevant") : "Similarity only"}
                           </span>
                         </div>
-                        <span className="text-xs font-mono text-gray-500">{formatPercent(item.score)}</span>
+                        <span className="text-xs font-mono text-gray-500">Similarity {formatPercent(item.score)}</span>
                       </div>
                       <p className="text-sm leading-relaxed text-gray-700">{item.text_preview}</p>
                     </div>

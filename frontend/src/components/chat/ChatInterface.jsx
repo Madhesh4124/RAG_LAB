@@ -12,7 +12,6 @@ export default function ChatInterface({ docId, docIds = [], configId }) {
   const [showEvaluation, setShowEvaluation] = useState(false);
   const [selectedAssistantId, setSelectedAssistantId] = useState("");
   const [evaluationReport, setEvaluationReport] = useState(null);
-  const [evaluationLoading, setEvaluationLoading] = useState(false);
   const [evaluationError, setEvaluationError] = useState("");
   const [deepEvaluationLoading, setDeepEvaluationLoading] = useState(false);
 
@@ -72,35 +71,7 @@ export default function ChatInterface({ docId, docIds = [], configId }) {
     }
   }, [messages, selectedAssistantId]);
 
-  useEffect(() => {
-    if (!showEvaluation || !selectedAssistantId) return;
-
-    let cancelled = false;
-    const loadReport = async () => {
-      setEvaluationLoading(true);
-      setEvaluationError("");
-      try {
-        const { data } = await getEvaluationReport({ message_id: selectedAssistantId, deep: false });
-        if (!cancelled) {
-          setEvaluationReport(data);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setEvaluationError(error?.response?.data?.detail || error?.message || "Failed to load evaluation report.");
-          setEvaluationReport(null);
-        }
-      } finally {
-        if (!cancelled) {
-          setEvaluationLoading(false);
-        }
-      }
-    };
-
-    void loadReport();
-    return () => {
-      cancelled = true;
-    };
-  }, [showEvaluation, selectedAssistantId]);
+  // Automatic loading removed. Evaluation is now only triggered manually by the user.
 
   const handleSend = async (query) => {
     setMessages((prev) => [...prev, { role: "user", content: query }]);
@@ -249,7 +220,7 @@ export default function ChatInterface({ docId, docIds = [], configId }) {
     } catch (error) {
       const detail = error?.response?.data?.detail || error?.message || "Failed to run deep evaluation.";
       if (String(detail).toLowerCase().includes("timeout")) {
-        setEvaluationError("Deep evaluation took too long and was stopped. Use the fast report or retry later.");
+        setEvaluationError("Evaluation took too long and was stopped. Please retry later.");
       } else {
         setEvaluationError(detail);
       }
@@ -305,7 +276,7 @@ export default function ChatInterface({ docId, docIds = [], configId }) {
         onClose={() => setShowEvaluation(false)}
         title="Chat Evaluation"
         report={evaluationReport}
-        loading={evaluationLoading}
+        loading={deepEvaluationLoading}
         error={evaluationError}
         onRunDeepEvaluation={handleRunDeepEvaluation}
         deepLoading={deepEvaluationLoading}

@@ -30,13 +30,14 @@ def _no_external_chroma(monkeypatch):
 def test_index_tables_endpoint(tmp_path, monkeypatch):
     client = TestClient(app)
 
-    # Create a minimal PDF file content (empty PDF header) and insert into DB via upload endpoint
-    pdf_content = b"%PDF-1.4\n%âãÏÓ\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+    pdf_content = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+    t_pdf = tmp_path / "t.pdf"
+    t_pdf.write_bytes(pdf_content)
 
     # Use a direct DB insert approach since auth flows are heavy; instead, test endpoint wiring by
     # creating a temporary Document-like object and calling the background function directly.
     # Here we call the table_indexer.index_pdf_tables directly to assert it uses the fake vectorstore.
     from app.services.table_indexer import index_pdf_tables
-    count = index_pdf_tables(file_path=str(tmp_path / "t.pdf"))
+    count = index_pdf_tables(file_path=str(t_pdf))
     # No tables in minimal file, expect 0
     assert count == 0

@@ -53,7 +53,7 @@ export const clearChromaDb = () => api.post("/compare/clear-chromadb");
 export const scoreMessage = (messageId) => api.post("/api/evaluation/score", { message_id: messageId });
 export const getEvaluationReport = (payload) =>
   api.post("/api/evaluation/report", payload, {
-    timeout: payload?.deep ? 30000 : 10000,
+    timeout: payload?.deep ? 120000 : 10000,
   });
 
 // ── MOCK DATA (delete once backend is ready) ────────────────────

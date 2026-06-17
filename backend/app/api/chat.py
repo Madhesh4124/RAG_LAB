@@ -91,6 +91,37 @@ def _extract_chunks(results: List[Any]) -> List[Any]:
     return results
 
 
+def _serialize_retrieved_chunks(results: List[Any]) -> list[dict[str, Any]]:
+    if not results:
+        return []
+
+    raw_scores = []
+    for res in results:
+        if isinstance(res, tuple) and len(res) == 2:
+            raw_scores.append(float(res[1]))
+        else:
+            raw_scores.append(float(getattr(res, "score", 0.0)))
+
+    display_scores = _normalize_scores_for_display(raw_scores)
+    serialized = []
+    for idx, res in enumerate(results):
+        if isinstance(res, tuple) and len(res) == 2:
+            chunk, score = res
+        else:
+            chunk = res
+            score = getattr(chunk, "score", 0.0)
+
+        chunk_metadata = getattr(chunk, "metadata", {}) or {}
+        serialized.append({
+            "id": str(getattr(chunk, "id", idx)),
+            "text": chunk_metadata.get("window_text") or getattr(chunk, "text", str(chunk)),
+            "score": float(display_scores[idx]) if idx < len(display_scores) else float(score),
+            "raw_score": float(score),
+            "section_heading": chunk_metadata.get("section_heading"),
+        })
+    return serialized
+
+
 async def _ensure_summary_for_doc(db: AsyncSession, pipeline: Any, doc: Document, user_id: uuid.UUID, config_id: uuid.UUID):
     llm_client = getattr(pipeline, "llm_client", None)
     if not llm_client or not getattr(llm_client, "llm", None):
@@ -322,7 +353,7 @@ async def chat_endpoint(
     db: AsyncSession = Depends(get_db),
     rate_limiter: DatabaseRateLimiter = Depends(get_rate_limiter),
 ):
-    from app.api.evaluation import score_message
+    from app.api.evaluation import _chunks_from_payload, score_message
     from app.services.pipeline_manager import PipelineManager
 
     scope_key = rate_limiter.build_scope_key(user_id=current_user.id)
@@ -457,38 +488,7 @@ async def chat_endpoint(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    retrieved_chunks = []
-    if 'retrieved_results' in locals():
-        raw_scores = []
-        for res in retrieved_results:
-            if isinstance(res, tuple) and len(res) == 2:
-                raw_scores.append(float(res[1]))
-            else:
-                raw_scores.append(float(getattr(res, "score", 0.0)))
-
-        display_scores = _normalize_scores_for_display(raw_scores)
-
-        for i, res in enumerate(retrieved_results):
-            if isinstance(res, tuple) and len(res) == 2:
-                chunk, score = res
-                chunk_metadata = getattr(chunk, "metadata", {}) or {}
-                retrieved_chunks.append({
-                    "id": str(getattr(chunk, "id", i)),
-                    "text": chunk_metadata.get("window_text") or getattr(chunk, "text", str(chunk)),
-                    "score": float(display_scores[i]) if i < len(display_scores) else float(score),
-                    "raw_score": float(score),
-                    "section_heading": chunk_metadata.get("section_heading"),
-                })
-            else:
-                chunk = res
-                chunk_metadata = getattr(chunk, "metadata", {}) or {}
-                retrieved_chunks.append({
-                    "id": str(getattr(chunk, "id", i)),
-                    "text": chunk_metadata.get("window_text") or getattr(chunk, "text", str(chunk)),
-                    "score": float(display_scores[i]) if i < len(display_scores) else float(getattr(chunk, "score", 0.0)),
-                    "raw_score": float(getattr(chunk, "score", 0.0)),
-                    "section_heading": chunk_metadata.get("section_heading"),
-                })
+    retrieved_chunks = _serialize_retrieved_chunks(retrieved_results if 'retrieved_results' in locals() else [])
 
     user_msg = ChatMessage(
         user_id=current_user.id,
@@ -535,7 +535,7 @@ async def chat_endpoint(
             assistant_msg=assistant_msg,
             query_text=query,
             llm_client=llm_client,
-            chunks=retrieved_chunks_only,
+            chunks=_chunks_from_payload(retrieved_chunks),
         )
     except Exception:
         # Evaluation should not block normal chat responses.
@@ -645,7 +645,6 @@ async def chat_stream_endpoint(
 
                 results = []
                 chunks = []
-                scores = []
 
                 if not summary_text:
                     _msg3 = json.dumps({'type': 'status', 'message': 'Synthesizing document overview…'})
@@ -653,8 +652,6 @@ async def chat_stream_endpoint(
                     generated_summary, fallback_results, fallback_chunks = await _generate_summary_on_the_fly(pipeline)
                     results = fallback_results
                     chunks = fallback_chunks
-                    raw_scores = [float(res[1]) if isinstance(res, tuple) else float(getattr(res, "score", 0.0)) for res in results]
-                    scores = _normalize_scores_for_display(raw_scores)
 
                     if generated_summary:
                         summary_text = generated_summary
@@ -671,14 +668,7 @@ async def chat_stream_endpoint(
                     else:
                         summary_text = _fallback_answer_from_chunks(query, chunks)
 
-                chunk_meta = [
-                    {
-                        "text": (getattr(c, "metadata", {}) or {}).get("window_text") or getattr(c, "text", ""),
-                        "score": round(scores[idx], 4),
-                        "raw_score": round(raw_scores[idx], 4) if idx < len(raw_scores) else None,
-                    }
-                    for idx, c in enumerate(chunks)
-                ]
+                chunk_meta = _serialize_retrieved_chunks(results)
                 yield f"data: {json.dumps({'type': 'metadata', 'chunks': chunk_meta})}\n\n"
 
                 full_response = summary_text
@@ -700,19 +690,9 @@ async def chat_stream_endpoint(
                     results = filtered if filtered else results
 
                 chunks = [res[0] if isinstance(res, tuple) else res for res in results]
-                raw_scores = [float(res[1]) if isinstance(res, tuple) else float(getattr(res, "score", 0.0)) for res in results]
-                scores = _normalize_scores_for_display(raw_scores)
 
                 # 2. Send full chunk text + score
-                chunk_meta = [
-                    {
-                        "text": (getattr(c, "metadata", {}) or {}).get("window_text") or getattr(c, "text", ""),
-                        "score": round(scores[idx], 4),
-                        "raw_score": round(raw_scores[idx], 4) if idx < len(raw_scores) else None,
-                        "section_heading": (getattr(c, "metadata", {}) or {}).get("section_heading"),
-                    }
-                    for idx, c in enumerate(chunks)
-                ]
+                chunk_meta = _serialize_retrieved_chunks(results)
                 yield f"data: {json.dumps({'type': 'metadata', 'chunks': chunk_meta})}\n\n"
 
                 # 3. Stream generation tokens
@@ -760,7 +740,7 @@ async def chat_stream_endpoint(
                         config_id=config_id,
                         role="assistant",
                         content=full_response,
-                        retrieved_chunks=[{"text": getattr(c, "text", ""), "score": scores[i]} for i, c in enumerate(chunks)]
+                        retrieved_chunks=chunk_meta,
                     )
                     write_db.add(assistant_msg)
                     await write_db.commit()

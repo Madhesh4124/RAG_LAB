@@ -21,7 +21,7 @@ _BEST_PRESET_CONFIG: Dict[str, Any] = {
         "reranker_model": "BAAI/bge-reranker-v2-m3",
         "min_candidates": 8,
     },
-    "llm": {"provider": "gemini", "model": "gemini-2.5-flash"},
+    "llm": {"provider": "gemini", "model": "gemma-4-27b-it"},
     "memory": {"type": "buffer", "max_turns": 6, "max_turns_before_summary": 4},
 }
 

@@ -54,14 +54,51 @@ class ContextQualityEvaluator:
         if not isinstance(data, list):
             raise ValueError(f"Could not parse boolean list from evaluator response: {raw_text}")
 
-        bools = [bool(item) for item in data][:expected_len]
+        bools = []
+        for item in data[:expected_len]:
+            if isinstance(item, bool):
+                bools.append(item)
+            elif isinstance(item, str):
+                bools.append(item.strip().lower() in {"true", "yes", "1"})
+            else:
+                bools.append(bool(item))
         if len(bools) < expected_len:
             bools.extend([False] * (expected_len - len(bools)))
         return bools
 
     @staticmethod
     def _parse_score(raw_text: str) -> float:
-        match = re.search(r"[-+]?\d*\.?\d+", str(raw_text).strip())
-        if not match:
+        text = str(raw_text or "").strip()
+        try:
+            payload = json.loads(text)
+            if isinstance(payload, dict):
+                for key in ("score", "context_recall", "recall", "rating"):
+                    value = payload.get(key)
+                    if isinstance(value, (int, float)):
+                        return float(value)
+            if isinstance(payload, (int, float)):
+                return float(payload)
+        except json.JSONDecodeError:
+            pass
+
+        labeled = re.search(
+            r"(?:score|context[_\s-]*recall|recall|rating)\s*[:=]\s*([-+]?\d*\.?\d+)",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if labeled:
+            return float(labeled.group(1))
+
+        first_line = text.splitlines()[0] if text else ""
+        first_line_match = re.search(r"^\s*([-+]?\d*\.?\d+)\s*$", first_line)
+        if first_line_match:
+            return float(first_line_match.group(1))
+
+        matches = [float(item) for item in re.findall(r"[-+]?\d*\.?\d+", text)]
+        in_range = [value for value in matches if 0.0 <= value <= 1.0]
+        if in_range:
+            return in_range[-1]
+
+        if not matches:
             raise ValueError(f"Could not parse context recall score from evaluator response: {raw_text}")
-        return float(match.group(0))
+        return matches[-1]

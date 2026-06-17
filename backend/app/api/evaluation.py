@@ -21,7 +21,7 @@ from app.services.chunking.base import Chunk
 from app.services.evaluation.answer_relevancy import AnswerRelevancyEvaluator
 from app.services.evaluation.context_quality import ContextQualityEvaluator
 from app.services.evaluation.faithfulness import FaithfulnessEvaluator
-from app.services.evaluation.retrieval_metrics import build_retrieval_metrics_report
+from app.services.evaluation.retrieval_metrics import build_retrieval_metrics_report, unified_deep_evaluation
 from app.services.pipeline_factory import PipelineFactory
 from app.services.query_classifier import classify_query
 
@@ -102,35 +102,44 @@ def score_message(
 
     parsed_chunks = chunks if chunks is not None else _chunks_from_payload(assistant_msg.retrieved_chunks or [])
 
-    faithfulness = FaithfulnessEvaluator().evaluate(
-        query=query_text,
-        answer=assistant_msg.content,
-        chunks=parsed_chunks,
-        llm_client=llm_client,
-    )
-    faithfulness = faithfulness if faithfulness is not None else 0.0
+    try:
+        faithfulness = FaithfulnessEvaluator().evaluate(
+            query=query_text,
+            answer=assistant_msg.content,
+            chunks=parsed_chunks,
+            llm_client=llm_client,
+        )
+    except Exception:
+        logger.warning("Faithfulness evaluation failed for message_id=%s", assistant_msg.id, exc_info=True)
+        faithfulness = None
 
-    answer_relevancy = AnswerRelevancyEvaluator().evaluate(
-        query=query_text,
-        answer=assistant_msg.content,
-        llm_client=llm_client,
-    )
-    answer_relevancy = answer_relevancy if answer_relevancy is not None else 0.0
+    try:
+        answer_relevancy = AnswerRelevancyEvaluator().evaluate(
+            query=query_text,
+            answer=assistant_msg.content,
+            llm_client=llm_client,
+        )
+    except Exception:
+        logger.warning("Answer relevancy evaluation failed for message_id=%s", assistant_msg.id, exc_info=True)
+        answer_relevancy = None
 
-    context_quality = ContextQualityEvaluator().evaluate(
-        query=query_text,
-        answer=assistant_msg.content,
-        chunks=parsed_chunks,
-        llm_client=llm_client,
-    )
-    context_quality = context_quality or {"context_precision": 0.0, "context_recall": 0.0}
+    try:
+        context_quality = ContextQualityEvaluator().evaluate(
+            query=query_text,
+            answer=assistant_msg.content,
+            chunks=parsed_chunks,
+            llm_client=llm_client,
+        )
+    except Exception:
+        logger.warning("Context quality evaluation failed for message_id=%s", assistant_msg.id, exc_info=True)
+        context_quality = {}
 
     result = EvaluationResult(
         message_id=assistant_msg.id,
         faithfulness=faithfulness,
         answer_relevancy=answer_relevancy,
-        context_precision=context_quality["context_precision"],
-        context_recall=context_quality["context_recall"],
+        context_precision=context_quality.get("context_precision"),
+        context_recall=context_quality.get("context_recall"),
     )
     db.add(result)
     return result
@@ -257,38 +266,81 @@ async def build_message_evaluation_report(
         candidate_results = await pipeline.aretrieve(user_msg.content, top_k=pool_k)
         candidate_chunks = [item[0] if isinstance(item, tuple) else item for item in candidate_results] or retrieved_chunks
 
-    report = build_retrieval_metrics_report(
-        query=user_msg.content,
-        answer=msg.content,
-        retrieved_chunks=retrieved_chunks,
-        candidate_chunks=candidate_chunks,
-        llm_client=llm_client,
-        embedder=embedder,
-        retrieval_config=retrieval_config,
-        query_mode=query_mode,
-    )
+    unified_result = None
+    if deep and llm_client is not None:
+        try:
+            unified_result = unified_deep_evaluation(
+                query=user_msg.content,
+                answer=msg.content,
+                retrieved_chunks=retrieved_chunks,
+                candidate_chunks=candidate_chunks,
+                llm_client=llm_client,
+            )
+        except Exception as e:
+            err_msg = str(e)
+            if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "quota" in err_msg.lower():
+                raise EvaluationServiceUnavailableError(
+                    "Gemini API quota limit exceeded or rate limit hit. Please check your Google AI Studio quota limits or retry in a few seconds."
+                )
+            logger.error("Failed to run unified deep evaluation: %s", e, exc_info=True)
+
+    if unified_result is not None:
+        report = build_retrieval_metrics_report(
+            query=user_msg.content,
+            answer=msg.content,
+            retrieved_chunks=retrieved_chunks,
+            candidate_chunks=candidate_chunks,
+            llm_client=llm_client,
+            embedder=embedder,
+            retrieval_config=retrieval_config,
+            query_mode=query_mode,
+            precomputed_retrieved_flags=unified_result["retrieved_flags"],
+            precomputed_candidate_flags=unified_result["candidate_flags"],
+        )
+    else:
+        report = build_retrieval_metrics_report(
+            query=user_msg.content,
+            answer=msg.content,
+            retrieved_chunks=retrieved_chunks,
+            candidate_chunks=candidate_chunks,
+            llm_client=llm_client,
+            embedder=embedder,
+            retrieval_config=retrieval_config,
+            query_mode=query_mode,
+        )
+
     report["message_id"] = str(msg.id)
     report["mode"] = "message-deep" if deep else "message-fast"
     answer_metrics = report.get("answer_metrics", {})
+    if deep:
+        if unified_result is not None:
+            answer_metrics["faithfulness"] = unified_result["faithfulness"]
+            answer_metrics["answer_relevancy"] = unified_result["answer_relevancy"]
+            answer_metrics["context_recall"] = unified_result["context_recall"]
+        else:
+            computed_answer_metrics = compute_answer_metrics(
+                query_text=user_msg.content,
+                answer_text=msg.content,
+                llm_client=llm_client,
+                chunks=retrieved_chunks,
+            )
+            for key, value in computed_answer_metrics.items():
+                if value is not None:
+                    answer_metrics[key] = value
+
     if eval_record is not None:
         answer_metrics.update(
             {
-                "faithfulness": eval_record.faithfulness,
-                "answer_relevancy": eval_record.answer_relevancy,
-                "context_precision": eval_record.context_precision,
-                "context_recall": eval_record.context_recall,
+                key: value
+                for key, value in {
+                    "faithfulness": eval_record.faithfulness,
+                    "answer_relevancy": eval_record.answer_relevancy,
+                    "context_precision": eval_record.context_precision,
+                    "context_recall": eval_record.context_recall,
+                }.items()
+                if value is not None and (not deep or answer_metrics.get(key) is None)
             }
         )
-    elif deep:
-        computed_answer_metrics = compute_answer_metrics(
-            query_text=user_msg.content,
-            answer_text=msg.content,
-            llm_client=llm_client,
-            chunks=retrieved_chunks,
-        )
-        for key, value in computed_answer_metrics.items():
-            if value is not None:
-                answer_metrics[key] = value
     report["answer_metrics"] = answer_metrics
     report["timing_ms"] = round((time.perf_counter() - started_at) * 1000, 2)
     return report
@@ -405,7 +457,7 @@ async def evaluate_report(
         if payload.message_id:
             if payload.deep:
                 timeout_seconds = float(
-                    __import__("os").getenv("DEEP_EVALUATION_TIMEOUT_SECONDS", "25")
+                    __import__("os").getenv("DEEP_EVALUATION_TIMEOUT_SECONDS", "120")
                 )
                 try:
                     return await asyncio.wait_for(

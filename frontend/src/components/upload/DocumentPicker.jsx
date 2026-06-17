@@ -25,7 +25,25 @@ export default function DocumentPicker({
       const response = query.trim()
         ? await searchDocuments(query.trim(), 100)
         : await listDocuments({ limit: 100 });
-      setDocuments(Array.isArray(response?.data) ? response.data : []);
+      const fetchedDocs = Array.isArray(response?.data) ? response.data : [];
+      setDocuments(fetchedDocs);
+
+      // Clean up selections: remove any IDs that do not exist in the fetched database documents
+      if (!query.trim() && fetchedDocs.length > 0) {
+        const fetchedIds = new Set(fetchedDocs.map((d) => String(d.id)));
+        const validValues = (values || []).map(String).filter((id) => fetchedIds.has(id));
+        if (validValues.length !== (values || []).length) {
+          if (multiSelect && onSelectMany) {
+            const nextDocs = fetchedDocs.filter((d) => validValues.includes(String(d.id)));
+            onSelectMany(nextDocs);
+          } else if (!multiSelect && onSelect) {
+            const stillExists = fetchedDocs.some((d) => String(d.id) === String(value));
+            if (!stillExists) {
+              onSelect(null);
+            }
+          }
+        }
+      }
     } catch (err) {
       setError(err?.response?.data?.detail || err?.message || "Failed to load documents");
       setDocuments([]);

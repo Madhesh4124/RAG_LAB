@@ -1,20 +1,32 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import { deleteEvaluationReport, listEvaluationReports } from '../../services/api';
 
 function formatMetric(value) {
+  if (value === null || value === undefined) return "N/A";
   const num = Number(value);
   if (!Number.isFinite(num)) return "N/A";
   return num.toFixed(3);
 }
 
 function formatPercent(value) {
+  if (value === null || value === undefined) return "N/A";
   const num = Number(value);
   if (!Number.isFinite(num)) return "N/A";
   const normalized = num <= 1 ? num * 100 : num;
   return `${normalized.toFixed(1)}%`;
 }
 
+function formatDate(iso) {
+  if (!iso) return "";
+  try {
+    return new Date(iso).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" });
+  } catch {
+    return iso;
+  }
+}
+
 function MetricCard({ label, value, hint }) {
-  const available = Number.isFinite(Number(value));
+  const available = value !== null && value !== undefined && Number.isFinite(Number(value));
   return (
     <div className={`rounded-xl border p-3 ${available ? "border-gray-200 bg-gray-50" : "border-gray-100 bg-gray-50/60"}`}>
       <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">{label}</p>
@@ -29,7 +41,86 @@ function formatReportMode(report, fastMode) {
   return fastMode ? "Fast score-only report" : "Deep judged report";
 }
 
+function SavedReportRow({ rec, onDelete }) {
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDelete = async () => {
+    if (!window.confirm("Delete this saved report?")) return;
+    setDeleting(true);
+    try {
+      await deleteEvaluationReport(rec.id);
+      onDelete(rec.id);
+    } catch {
+      alert("Failed to delete report.");
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white p-3 space-y-2">
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex-1 min-w-0">
+          <p className="text-xs font-medium text-gray-700 truncate">{rec.query || "(no query)"}</p>
+          <p className="text-[11px] text-gray-400 mt-0.5">
+            {rec.mode || "unknown"} · {formatDate(rec.created_at)}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={handleDelete}
+          disabled={deleting}
+          className="text-gray-400 hover:text-red-600 disabled:opacity-40 transition-colors p-1 shrink-0"
+          title="Delete report"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="3 6 5 6 21 6" />
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+          </svg>
+        </button>
+      </div>
+      <div className="grid grid-cols-4 gap-1.5 text-center">
+        {[
+          ["Faith.", rec.faithfulness],
+          ["Ans. Rel.", rec.answer_relevancy],
+          ["Ctx Prec.", rec.context_precision],
+          ["Ctx Rec.", rec.context_recall],
+        ].map(([label, val]) => (
+          <div key={label} className="rounded-lg bg-gray-50 border border-gray-100 py-1.5 px-1">
+            <p className="text-[10px] text-gray-400 font-semibold uppercase">{label}</p>
+            <p className={`font-mono text-sm mt-0.5 ${val !== null && val !== undefined && Number.isFinite(Number(val)) ? "text-gray-900" : "text-gray-300"}`}>
+              {formatMetric(val)}
+            </p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function EvaluationPanel({ open, onClose, title, report, loading, error, selector, onRunDeepEvaluation, deepLoading = false }) {
+  const [showSaved, setShowSaved] = useState(false);
+  const [savedReports, setSavedReports] = useState([]);
+  const [savedLoading, setSavedLoading] = useState(false);
+  const [savedError, setSavedError] = useState("");
+
+  const loadSavedReports = async () => {
+    setSavedLoading(true);
+    setSavedError("");
+    try {
+      const res = await listEvaluationReports({ limit: 20 });
+      setSavedReports(Array.isArray(res.data) ? res.data : []);
+    } catch (err) {
+      setSavedError(err?.response?.data?.detail || err?.message || "Failed to load reports");
+    } finally {
+      setSavedLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (showSaved) void loadSavedReports();
+  }, [showSaved]);
+
   if (!open) return null;
 
   const retrieval = report?.retrieval_metrics || {};
@@ -64,6 +155,13 @@ export default function EvaluationPanel({ open, onClose, title, report, loading,
               ) : null}
             </div>
             <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowSaved((v) => !v)}
+                className="rounded-lg border border-gray-200 px-3 py-1.5 text-sm text-gray-600 hover:border-purple-200 hover:bg-purple-50 hover:text-purple-700"
+              >
+                {showSaved ? "Hide Saved" : "Saved Reports"}
+              </button>
               {onRunDeepEvaluation ? (
                 <button
                   type="button"
@@ -87,6 +185,40 @@ export default function EvaluationPanel({ open, onClose, title, report, loading,
         </div>
 
         <div className="space-y-6 px-5 py-5">
+          {/* ── Saved Reports Panel ── */}
+          {showSaved && (
+            <section className="space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-sm font-semibold text-gray-900">Saved Reports</h3>
+                <button
+                  type="button"
+                  onClick={() => void loadSavedReports()}
+                  disabled={savedLoading}
+                  className="text-xs text-blue-600 hover:text-blue-700 disabled:opacity-50"
+                >
+                  {savedLoading ? "Loading..." : "Refresh"}
+                </button>
+              </div>
+              {savedError && (
+                <p className="text-xs text-red-600">{savedError}</p>
+              )}
+              {!savedLoading && savedReports.length === 0 && (
+                <div className="rounded-xl border border-dashed border-gray-200 px-4 py-6 text-sm text-gray-400 text-center">
+                  No saved reports yet. Run an evaluation above to generate and save one.
+                </div>
+              )}
+              <div className="space-y-2">
+                {savedReports.map((rec) => (
+                  <SavedReportRow
+                    key={rec.id}
+                    rec={rec}
+                    onDelete={(id) => setSavedReports((prev) => prev.filter((r) => r.id !== id))}
+                  />
+                ))}
+              </div>
+            </section>
+          )}
+
           {loading ? (
             <div className="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-8 text-center text-sm text-gray-500">
               Computing evaluation report...

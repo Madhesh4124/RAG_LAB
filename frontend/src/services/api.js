@@ -55,6 +55,13 @@ export const getEvaluationReport = (payload) =>
   api.post("/api/evaluation/report", payload, {
     timeout: payload?.deep ? 120000 : 10000,
   });
+export const listEvaluationReports = (params = {}) =>
+  api.get("/api/evaluation/reports", { params });
+export const getEvaluationReportById = (reportId) =>
+  api.get(`/api/evaluation/reports/${reportId}`);
+export const deleteEvaluationReport = (reportId) =>
+  api.delete(`/api/evaluation/reports/${reportId}`);
+
 
 // ── MOCK DATA (delete once backend is ready) ────────────────────
 export const MOCK_CHUNKS = [

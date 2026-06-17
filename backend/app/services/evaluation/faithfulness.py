@@ -26,8 +26,12 @@ class FaithfulnessEvaluator:
         )
 
         response = llm_client.llm.invoke(prompt)
-        content = getattr(response, "content", "")
-        score = self._parse_score(str(content))
+        raw_content = getattr(response, "content", "")
+        from app.services.evaluation.retrieval_metrics import _extract_text_content
+        content = _extract_text_content(raw_content).strip()
+        import logging
+        logging.getLogger(__name__).warning("FaithfulnessEvaluator raw: %r, extracted: %r", raw_content, content)
+        score = self._parse_score(content)
         return max(0.0, min(1.0, score))
 
     @staticmethod

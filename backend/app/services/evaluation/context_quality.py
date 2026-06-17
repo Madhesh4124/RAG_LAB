@@ -25,7 +25,13 @@ class ContextQualityEvaluator:
             f"Chunks:\n{chunks_text}"
         )
         precision_response = llm_client.llm.invoke(precision_prompt)
-        precision_flags = self._parse_bool_list(getattr(precision_response, "content", ""), expected_len=len(chunks))
+        raw_prec = getattr(precision_response, "content", "")
+        from app.services.evaluation.retrieval_metrics import _extract_text_content
+        prec_content = _extract_text_content(raw_prec).strip()
+        import logging
+        logging.getLogger(__name__).warning("ContextQualityEvaluator precision raw: %r, extracted: %r", raw_prec, prec_content)
+        
+        precision_flags = self._parse_bool_list(prec_content, expected_len=len(chunks))
         relevant_count = sum(1 for flag in precision_flags if flag)
         context_precision = relevant_count / len(chunks)
 
@@ -35,7 +41,11 @@ class ContextQualityEvaluator:
             "Score 0.0-1.0 where 1.0 means the chunks fully cover what's needed."
         )
         recall_response = llm_client.llm.invoke(recall_prompt)
-        context_recall = self._parse_score(getattr(recall_response, "content", ""))
+        raw_recall = getattr(recall_response, "content", "")
+        recall_content = _extract_text_content(raw_recall).strip()
+        logging.getLogger(__name__).warning("ContextQualityEvaluator recall raw: %r, extracted: %r", raw_recall, recall_content)
+        
+        context_recall = self._parse_score(recall_content)
 
         return {
             "context_precision": max(0.0, min(1.0, context_precision)),

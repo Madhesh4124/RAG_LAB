@@ -1,13 +1,14 @@
+import json
 import logging
 import asyncio
 import time
 import uuid
 from copy import deepcopy
-from typing import Any, Optional
+from typing import Any, List, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Path
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete as sa_delete
 from sqlalchemy.exc import OperationalError
 from pydantic import BaseModel, Field
 
@@ -16,6 +17,7 @@ from app.auth import get_current_user
 from app.models.user import User
 from app.models.chat import ChatMessage
 from app.models.evaluation import EvaluationResult
+from app.models.evaluation_report import EvaluationReport, EvaluationReportSummary
 from app.models.rag_config import RAGConfig
 from app.services.chunking.base import Chunk
 from app.services.evaluation.answer_relevancy import AnswerRelevancyEvaluator
@@ -24,6 +26,7 @@ from app.services.evaluation.faithfulness import FaithfulnessEvaluator
 from app.services.evaluation.retrieval_metrics import build_retrieval_metrics_report, unified_deep_evaluation
 from app.services.pipeline_factory import PipelineFactory
 from app.services.query_classifier import classify_query
+
 
 router = APIRouter(prefix="/api/evaluation", tags=["evaluation"])
 logger = logging.getLogger(__name__)
@@ -314,9 +317,10 @@ async def build_message_evaluation_report(
     answer_metrics = report.get("answer_metrics", {})
     if deep:
         if unified_result is not None:
-            answer_metrics["faithfulness"] = unified_result["faithfulness"]
-            answer_metrics["answer_relevancy"] = unified_result["answer_relevancy"]
-            answer_metrics["context_recall"] = unified_result["context_recall"]
+            for key in ("faithfulness", "answer_relevancy", "context_recall"):
+                val = unified_result.get(key)
+                if val is not None:
+                    answer_metrics[key] = val
         else:
             computed_answer_metrics = compute_answer_metrics(
                 query_text=user_msg.content,
@@ -460,7 +464,7 @@ async def evaluate_report(
                     __import__("os").getenv("DEEP_EVALUATION_TIMEOUT_SECONDS", "120")
                 )
                 try:
-                    return await asyncio.wait_for(
+                    report = await asyncio.wait_for(
                         build_message_evaluation_report(
                             db=db,
                             message_id=payload.message_id,
@@ -473,13 +477,27 @@ async def evaluate_report(
                     raise EvaluationServiceUnavailableError(
                         f"Deep evaluation timed out after {int(timeout_seconds)} seconds"
                     )
+            else:
+                report = await build_message_evaluation_report(
+                    db=db,
+                    message_id=payload.message_id,
+                    user_id=current_user.id,
+                    deep=False,
+                )
 
-            return await build_message_evaluation_report(
-                db=db,
-                message_id=payload.message_id,
-                user_id=current_user.id,
-                deep=False,
-            )
+            # Auto-save report to DB
+            try:
+                await _save_report(
+                    db=db,
+                    user_id=current_user.id,
+                    message_id=payload.message_id,
+                    report=report,
+                )
+                await db.commit()
+            except Exception:
+                logger.warning("Failed to auto-save evaluation report", exc_info=True)
+
+            return report
 
         if not payload.query:
             raise EvaluationBadRequestError("Either message_id or query must be provided")
@@ -495,3 +513,107 @@ async def evaluate_report(
     except Exception:
         logger.exception("Unexpected error during evaluation report generation")
         raise HTTPException(status_code=500, detail="Internal server error during evaluation report generation")
+
+
+async def _save_report(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    report: dict,
+    message_id: Optional[uuid.UUID] = None,
+) -> EvaluationReport:
+    """Persist a full evaluation report JSON to the evaluation_reports table."""
+    record = EvaluationReport(
+        user_id=user_id,
+        message_id=message_id,
+        mode=report.get("mode"),
+        report_json=json.dumps(report),
+    )
+    db.add(record)
+    return record
+
+
+@router.get("/reports", response_model=List[EvaluationReportSummary])
+async def list_evaluation_reports(
+    limit: int = 50,
+    offset: int = 0,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """List saved evaluation reports for the current user, newest first."""
+    try:
+        stmt = (
+            select(EvaluationReport)
+            .where(EvaluationReport.user_id == current_user.id)
+            .order_by(EvaluationReport.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        records = (await db.execute(stmt)).scalars().all()
+    except OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            return []
+        raise HTTPException(status_code=500, detail="Database error listing reports")
+
+    summaries = []
+    for rec in records:
+        try:
+            data = json.loads(rec.report_json or "{}")
+        except Exception:
+            data = {}
+        answer_metrics = data.get("answer_metrics", {})
+        retrieval_metrics = data.get("retrieval_metrics", {})
+        summaries.append(
+            EvaluationReportSummary(
+                id=rec.id,
+                message_id=rec.message_id,
+                mode=rec.mode,
+                created_at=rec.created_at,
+                query=data.get("query"),
+                faithfulness=answer_metrics.get("faithfulness"),
+                answer_relevancy=answer_metrics.get("answer_relevancy"),
+                context_precision=answer_metrics.get("context_precision"),
+                context_recall=answer_metrics.get("context_recall"),
+                precision_at_k=retrieval_metrics.get("precision_at_k"),
+                recall_at_k=retrieval_metrics.get("recall_at_k"),
+            )
+        )
+    return summaries
+
+
+@router.get("/reports/{report_id}")
+async def get_evaluation_report(
+    report_id: uuid.UUID = Path(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Retrieve a single saved evaluation report (full JSON)."""
+    stmt = select(EvaluationReport).where(
+        EvaluationReport.id == report_id,
+        EvaluationReport.user_id == current_user.id,
+    )
+    record = (await db.execute(stmt)).scalars().first()
+    if not record:
+        raise HTTPException(status_code=404, detail="Report not found")
+    try:
+        return json.loads(record.report_json)
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to parse saved report")
+
+
+@router.delete("/reports/{report_id}", status_code=204)
+async def delete_evaluation_report(
+    report_id: uuid.UUID = Path(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a saved evaluation report."""
+    stmt = select(EvaluationReport).where(
+        EvaluationReport.id == report_id,
+        EvaluationReport.user_id == current_user.id,
+    )
+    record = (await db.execute(stmt)).scalars().first()
+    if not record:
+        raise HTTPException(status_code=404, detail="Report not found")
+    await db.delete(record)
+    await db.commit()
+

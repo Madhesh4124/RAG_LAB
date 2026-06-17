@@ -9,6 +9,41 @@ logger = logging.getLogger(__name__)
 from app.services.chunking.base import Chunk
 
 
+def _extract_text_content(content: Any) -> str:
+    """Safely convert LLM response content to a plain string.
+
+    Gemini (and other LLMs) can return content as:
+    - a plain str
+    - a list of content blocks (e.g. [{"type": "thinking", ...}, {"type": "text", "text": "..."}])
+    - a dict
+    This helper extracts only the text parts, discarding thinking/reasoning blocks.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, (int, float, bool)):
+        return str(content)
+    if isinstance(content, dict):
+        if content.get("type") in {"thinking", "thought"}:
+            return ""
+        for key in ("text", "output_text", "content", "parts"):
+            val = content.get(key)
+            if val is not None:
+                extracted = _extract_text_content(val)
+                if extracted:
+                    return extracted
+        return ""
+    if isinstance(content, list):
+        parts: List[str] = []
+        for item in content:
+            text = _extract_text_content(item)
+            if text:
+                parts.append(text)
+        return "".join(parts)
+    return str(content)
+
+
 def _safe_text(value: Any) -> str:
     return str(value or "").strip()
 
@@ -319,21 +354,35 @@ def unified_deep_evaluation(
     )
 
     response = llm_client.llm.invoke(prompt)
-    content = str(getattr(response, "content", "")).strip()
+    # Use _extract_text_content to safely handle list/dict/str content
+    # (Gemini thinking-mode returns a list of blocks; str() on a list gives a Python repr, not JSON)
+    raw_content = getattr(response, "content", "")
+    content = _extract_text_content(raw_content).strip()
+    logger.debug("unified_deep_evaluation raw content: %r", content[:500])
 
     # Parse JSON output
     try:
-        # Strip code block decorators if any
-        if content.startswith("```"):
-            cleaned = content.strip("`").strip()
-            if cleaned.startswith("json"):
-                cleaned = cleaned[4:].strip()
-            data = json.loads(cleaned)
+        # Strip markdown code block decorators if any (e.g. ```json ... ```)
+        cleaned = re.sub(r"^```(?:json)?\s*", "", content, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s*```$", "", cleaned).strip()
+        data = json.loads(cleaned)
+    except Exception:
+        # Fallback: try to extract the first JSON object from the response
+        json_match = re.search(r"\{[\s\S]*\}", content)
+        if json_match:
+            try:
+                data = json.loads(json_match.group(0))
+            except Exception as e2:
+                logger.warning(
+                    "Failed to parse JSON from unified evaluator (fallback also failed: %s). Content: %r",
+                    e2, content[:500]
+                )
+                data = {}
         else:
-            data = json.loads(content)
-    except Exception as e:
-        logger.warning("Failed to parse JSON response from unified evaluator: %s. Output was: %s", e, content)
-        data = {}
+            logger.warning(
+                "No JSON object found in unified evaluator response. Content: %r", content[:500]
+            )
+            data = {}
 
     # Extract & validate lists of booleans
     retrieved_flags = data.get("retrieved_relevance")
@@ -348,18 +397,20 @@ def unified_deep_evaluation(
     retrieved_flags = [bool(f) for f in retrieved_flags]
     candidate_flags = [bool(f) for f in candidate_flags]
 
-    # Helper to parse floats safely
-    def get_float(key, default=0.5):
+    # Helper to parse floats safely; returns None when the key is absent or unparseable
+    def get_float(key):
         val = data.get(key)
+        if val is None:
+            return None
         try:
             return max(0.0, min(1.0, float(val)))
         except (TypeError, ValueError):
-            return default
+            return None
 
     return {
         "retrieved_flags": retrieved_flags,
         "candidate_flags": candidate_flags,
-        "faithfulness": get_float("faithfulness", 0.0),
-        "answer_relevancy": get_float("answer_relevancy", 0.0),
-        "context_recall": get_float("context_recall", 0.0),
+        "faithfulness": get_float("faithfulness"),
+        "answer_relevancy": get_float("answer_relevancy"),
+        "context_recall": get_float("context_recall"),
     }

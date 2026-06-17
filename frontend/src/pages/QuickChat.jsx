@@ -51,6 +51,7 @@ export default function QuickChat() {
 
     try {
       const uploadedDocs = [];
+      const uploadedIds = [];
       for (let index = 0; index < nextFiles.length; index += 1) {
         const file = nextFiles[index];
         setUploadFileIndex(index + 1);
@@ -67,17 +68,17 @@ export default function QuickChat() {
         uploadedDocs.push(data);
         const uploadedId = data?.id;
         if (uploadedId) {
-          setSelectedDocIds((prev) => {
-            const next = [String(uploadedId), ...prev.filter((id) => String(id) !== String(uploadedId))];
-            return Array.from(new Set(next));
-          });
-          setDocId(uploadedId);
+          uploadedIds.push(String(uploadedId));
         }
         setFilename(data?.filename || file.name);
         setConfigId(null);
       }
 
-      if (uploadedDocs.length) {
+      if (uploadedDocs.length && uploadedIds.length) {
+        // Replace selection with only the newly-uploaded docs to avoid stale count accumulation
+        const deduped = Array.from(new Set(uploadedIds));
+        setSelectedDocIds(deduped);
+        setDocId(deduped[0] || null);
         setRecentUploads((prev) => [...uploadedDocs.map((doc) => ({ id: doc?.id, filename: doc?.filename })), ...prev].slice(0, 5));
         setReloadToken((value) => value + 1);
         setShowUploadModal(false);
@@ -88,6 +89,7 @@ export default function QuickChat() {
       setIsUploading(false);
     }
   };
+
 
   const handleStartChat = async () => {
     if (!primaryDocId) return;

@@ -9,7 +9,7 @@ from itsdangerous import BadSignature, URLSafeTimedSerializer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import AsyncSessionLocal, get_db
+from app.database import AsyncSessionLocal, get_db, ensure_sqlite_db_dir
 from app.models.user import User, PasswordResetToken
 
 SESSION_COOKIE_NAME = "raglab_session"
@@ -145,15 +145,15 @@ async def get_current_user(request: Request) -> User:
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
 
+    ensure_sqlite_db_dir()
     try:
-        user_id = decode_session_token(token)
-    except BadSignature:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session")
+        async with AsyncSessionLocal() as db:
+            stmt = select(User).where(User.id == user_id)
+            result = await db.execute(stmt)
+            user = result.scalars().first()
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired or invalid")
 
-    async with AsyncSessionLocal() as db:
-        stmt = select(User).where(User.id == user_id)
-        result = await db.execute(stmt)
-        user = result.scalars().first()
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
     return user

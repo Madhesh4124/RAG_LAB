@@ -211,6 +211,45 @@ async def delete_collection(
     return ChromaDeleteResponse(status="success", deleted=deleted)
 
 
+def _safe_clean_chroma_root(target_root: Path) -> None:
+    """Safely remove only Chroma vector store files and collections without deleting
+    the root directory itself, the application database (rag_lab.db), or uploads.
+    """
+    if not target_root.exists() or not target_root.is_dir():
+        target_root.mkdir(parents=True, exist_ok=True)
+        return
+
+    protected_exact = {
+        "rag_lab.db",
+        "rag_lab.db-wal",
+        "rag_lab.db-shm",
+        "uploads",
+    }
+
+    try:
+        entries = list(target_root.iterdir())
+    except Exception:
+        target_root.mkdir(parents=True, exist_ok=True)
+        return
+
+    for item in entries:
+        name = item.name.lower()
+        if name in protected_exact:
+            continue
+        if name.endswith(".db") or name.endswith(".db-wal") or name.endswith(".db-shm"):
+            continue
+
+        try:
+            if item.is_dir():
+                shutil.rmtree(item, ignore_errors=True)
+            else:
+                item.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    target_root.mkdir(parents=True, exist_ok=True)
+
+
 @router.delete("/chroma/root", response_model=ChromaDeleteResponse)
 async def clear_root(
     root_path: Optional[str] = Query(None),
@@ -228,13 +267,9 @@ async def clear_root(
         except Exception:
             pass
 
-        if target_root.exists():
-            try:
-                await asyncio.to_thread(shutil.rmtree, target_root)
-            except Exception:
-                # If filesystem removal is blocked by locks, keep folder but collections
-                # are already deleted through Chroma API.
-                pass
+        await asyncio.to_thread(_safe_clean_chroma_root, target_root)
+        deleted.append(str(target_root))
+
     return ChromaDeleteResponse(status="success", deleted=deleted)
 
 

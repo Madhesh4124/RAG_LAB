@@ -1,4 +1,4 @@
-#!/bin/sh
+﻿#!/bin/sh
 set -e
 
 # ---------------------------------------------------------------------------
@@ -7,7 +7,7 @@ set -e
 # Priority:
 #   1. CHROMA_PERSIST_DIR env-var (explicit override)
 #   2. /data              (HF Spaces persistent storage root)
-#   3. /data/chroma_data  (legacy subdir — may not be mkdir-able)
+#   3. /data/chroma_data  (legacy subdir â€” may not be mkdir-able)
 #   4. /app/backend/chroma_data (ephemeral fallback, wiped on restart)
 # ---------------------------------------------------------------------------
 FALLBACK_DB_DIR="/app/backend/chroma_data"
@@ -20,50 +20,48 @@ _try_dir() {
   [ -d "$_d" ] && [ -w "$_d" ]
 }
 
-if [ -n "${CHROMA_PERSIST_DIR:-}" ]; then
-  DB_DIR="$CHROMA_PERSIST_DIR"
-  _try_dir "$DB_DIR" || {
-    echo "[WARN] CHROMA_PERSIST_DIR=$DB_DIR is not writable. Trying /data..."
-    DB_DIR=""
-  }
+# Determine persistent storage root (prioritize /data on HF Spaces)
+PERSIST_BASE=""
+if _try_dir "/data"; then
+  PERSIST_BASE="/data"
+  echo "[INFO] Using /data as persistent storage base"
+elif [ -n "${CHROMA_PERSIST_DIR:-}" ] && _try_dir "$CHROMA_PERSIST_DIR"; then
+  PERSIST_BASE="$CHROMA_PERSIST_DIR"
+  echo "[INFO] Using $CHROMA_PERSIST_DIR as persistent storage base"
+else
+  echo "[WARN] /data is not writable by uid $(id -u). Falling back to $FALLBACK_DB_DIR"
+  PERSIST_BASE="$FALLBACK_DB_DIR"
+  mkdir -p "$PERSIST_BASE"
 fi
 
-if [ -z "${DB_DIR:-}" ]; then
-  # Try /data first (HF Spaces persistent root — no subdir creation needed)
-  if _try_dir "/data"; then
-    DB_DIR="/data"
-    echo "[INFO] Using /data as persist directory"
-  elif _try_dir "/data/chroma_data"; then
-    DB_DIR="/data/chroma_data"
-    echo "[INFO] Using /data/chroma_data as persist directory"
-  else
-    echo "[WARN] /data is not writable by uid $(id -u). Falling back to $FALLBACK_DB_DIR"
-    DB_DIR="$FALLBACK_DB_DIR"
-    mkdir -p "$DB_DIR"
-  fi
+# 1. Dedicated Chroma persist directory (isolated subfolder so clearing Chroma never destroys the DB)
+export CHROMA_PERSIST_DIR="${PERSIST_BASE}/chroma_data"
+mkdir -p "$CHROMA_PERSIST_DIR"
+
+# 2. Dedicated SQLite application database in PERSIST_BASE
+# If an older rag_lab.db was placed inside chroma_data, safely migrate it to PERSIST_BASE
+if [ -f "$PERSIST_BASE/chroma_data/rag_lab.db" ] && [ ! -f "$PERSIST_BASE/rag_lab.db" ]; then
+  echo "[INFO] Migrating rag_lab.db from $PERSIST_BASE/chroma_data/ to $PERSIST_BASE/rag_lab.db"
+  mv "$PERSIST_BASE/chroma_data/rag_lab.db"* "$PERSIST_BASE/" 2>/dev/null || true
 fi
 
-export CHROMA_PERSIST_DIR="$DB_DIR"
-
-# Force SQLite deployments to use an async, writable DB URL.
-# Keep non-SQLite URLs (for example PostgreSQL) unchanged.
+# Force SQLite deployments to use an async, writable DB URL in PERSIST_BASE
 case "${DATABASE_URL:-}" in
   "")
-    export DATABASE_URL="sqlite+aiosqlite:///$CHROMA_PERSIST_DIR/rag_lab.db"
+    export DATABASE_URL="sqlite+aiosqlite:///$PERSIST_BASE/rag_lab.db"
     ;;
   sqlite://*|sqlite+aiosqlite://*)
-    export DATABASE_URL="sqlite+aiosqlite:///$CHROMA_PERSIST_DIR/rag_lab.db"
+    export DATABASE_URL="sqlite+aiosqlite:///$PERSIST_BASE/rag_lab.db"
     ;;
 esac
 
-# Resolve a writable directory for file uploads.
-# Co-locate with the DB dir so uploads survive in the same persistent area.
+# 3. Dedicated uploads directory
 FALLBACK_UPLOAD_DIR="/app/backend/uploads"
 
 if [ -n "${UPLOAD_DIR:-}" ]; then
   UPLOAD_CANDIDATE="$UPLOAD_DIR"
 else
-  UPLOAD_CANDIDATE="$DB_DIR/uploads"
+  UPLOAD_CANDIDATE="$PERSIST_BASE/uploads"
 fi
 
 if ! _try_dir "$UPLOAD_CANDIDATE"; then
@@ -109,13 +107,13 @@ for d in dirs:
 # Run Alembic migrations (async-enabled env.py handles aiosqlite)
 alembic upgrade head
 
-# SQLite cannot safely serve multiple Gunicorn workers — concurrent WAL readers
+# SQLite cannot safely serve multiple Gunicorn workers â€” concurrent WAL readers
 # across separate process connections cause stale-read 404s and write conflicts.
 # Cap at 1 worker for SQLite; honour WEB_CONCURRENCY only for PostgreSQL.
 case "${DATABASE_URL:-}" in
   sqlite://*|sqlite+aiosqlite://*)
     EFFECTIVE_WORKERS=1
-    echo "[INFO] SQLite detected — capping Gunicorn workers to 1 to prevent WAL race conditions"
+    echo "[INFO] SQLite detected â€” capping Gunicorn workers to 1 to prevent WAL race conditions"
     ;;
   *)
     EFFECTIVE_WORKERS="${WEB_CONCURRENCY:-4}"

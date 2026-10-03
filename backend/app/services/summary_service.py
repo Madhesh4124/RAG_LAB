@@ -14,10 +14,27 @@ from app.services.llm.gemini_client import GeminiClient
 _DEFAULT_CHUNK_SUMMARY_PROMPT = "Summarize the following document chunk in 2-3 concise bullet points. Keep only essential facts.\n\n"
 _DEFAULT_COMBINE_PROMPT = (
     "Combine the following chunk summaries into one coherent document-level summary. "
-    "Include: topic, main ideas, and key takeaways. Keep it concise and factual.\n\n"
+    "Include: topic, main ideas, and key takeaways. Keep it concise, factual, and complete.\n\n"
 )
 
 logger = logging.getLogger(__name__)
+
+
+def is_truncated(text: Optional[str]) -> bool:
+    """Return True if text appears incomplete or truncated mid-sentence/mid-word."""
+    if not text:
+        return True
+    s = text.strip()
+    if len(s) < 80:
+        return True
+    valid_endings = (
+        ".", "!", "?", '"', "'", "”", "’", "```", ")", "]", "}", "。",
+    )
+    if any(s.endswith(end) for end in valid_endings):
+        return False
+    if s.endswith("**") or s.endswith("*") or s.endswith("__"):
+        return False
+    return True
 
 
 class SummaryService:
@@ -77,12 +94,12 @@ class SummaryService:
         llm_client: Optional[GeminiClient],
     ) -> Optional[str]:
         existing = await SummaryService.get_summary(db, user_id, document_id, config_id)
-        if existing:
+        if existing and not is_truncated(existing):
             return existing
 
         generated = await SummaryService.generate_doc_summary(chunks, llm_client)
         if not generated:
-            return None
+            return existing if existing else None
 
         await SummaryService.upsert_summary(
             db=db,
@@ -133,7 +150,8 @@ class SummaryService:
         combined_text = SEPARATOR.join(full_text_parts)
         prompt = (
             "Please read the following document excerpt and provide a coherent, document-level summary. "
-            "Include the main topic, core ideas, and key takeaways. Keep it concise, factual, and strictly based on the text below.\n\n"
+            "Include the main topic, core ideas, and key takeaways. Keep it concise, factual, and strictly based on the text below. "
+            "Ensure the summary is complete and all sentences and bullet points are fully finished.\n\n"
             f"{combined_text}"
         )
         return await SummaryService._invoke_llm_text(llm_client, prompt)

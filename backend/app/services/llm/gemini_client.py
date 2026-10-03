@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 @lru_cache(maxsize=8)
 def _build_llm(model_name: str, temperature: float, api_key: str) -> ChatGoogleGenerativeAI:
-    max_output_tokens = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "1024"))
+    max_output_tokens = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "4096"))
     if model_name in ("gemma-4-27b-it", "gemma-4-31b-it", "gemma-4-31b", "gemma-31b", "gemma", "gemini-2.5", "gemma-4-26b-a4b-it"):
         actual_model = "gemini-2.5-flash"
     else:

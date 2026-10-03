@@ -19,7 +19,7 @@ from app.models.metrics import Metrics
 from app.utils.timing import PipelineTimer
 from app.services.rate_limiter import DatabaseRateLimiter, get_rate_limiter
 from app.services.query_classifier import classify_query
-from app.services.summary_service import SummaryService
+from app.services.summary_service import SummaryService, is_truncated
 from app.utils.file_processor import FileProcessor
 from app.services.rate_limiter import RateLimitExceededException
 from app.services.indexing_jobs import IndexingJobStore
@@ -452,6 +452,19 @@ async def chat_endpoint(
         logger.info("Chat query classified config_id=%s mode=%s", config_id, query_mode)
 
         if query_mode == "global":
+            timer.start("retrieval_time_ms")
+            retrieved_results = await pipeline.aretrieve(query, top_k=top_k)
+            if not retrieved_results:
+                retrieved_results = await pipeline.aretrieve(GLOBAL_SUMMARY_FALLBACK_QUERY, top_k=top_k)
+            if similarity_threshold is not None and retrieved_results and isinstance(retrieved_results[0], tuple):
+                retrieved_results = [
+                    (chunk, score)
+                    for chunk, score in retrieved_results
+                    if score >= float(similarity_threshold)
+                ]
+            timer.stop("retrieval_time_ms")
+            retrieved_chunks_only = _extract_chunks(retrieved_results)
+
             answer = await SummaryService.get_summary(
                 db=db,
                 user_id=current_user.id,
@@ -459,23 +472,29 @@ async def chat_endpoint(
                 config_id=config_id,
             )
 
+            if answer and is_truncated(answer):
+                logger.warning("Cached summary for doc_id=%s appears truncated; regenerating.", doc_id)
+                answer = None
+
             if not answer:
                 await rate_limiter.enforce_rate_limit(scope_key, "llm")
 
                 timer.start("llm_time_ms")
                 summary, fallback_results, fallback_chunks = await _generate_summary_on_the_fly(pipeline)
-                retrieved_results = fallback_results
-                retrieved_chunks_only = fallback_chunks
+                if not retrieved_results:
+                    retrieved_results = fallback_results
+                    retrieved_chunks_only = fallback_chunks
 
                 if summary:
                     answer = summary
-                    await SummaryService.upsert_summary(
-                        db=db,
-                        user_id=current_user.id,
-                        document_id=doc_id,
-                        config_id=config_id,
-                        summary=summary,
-                    )
+                    if not is_truncated(summary):
+                        await SummaryService.upsert_summary(
+                            db=db,
+                            user_id=current_user.id,
+                            document_id=doc_id,
+                            config_id=config_id,
+                            summary=summary,
+                        )
                     await rate_limiter.record_call(scope_key, "llm", current_user.id)
                 else:
                     answer = _fallback_answer_from_chunks(query, retrieved_chunks_only)
@@ -677,8 +696,17 @@ async def chat_stream_endpoint(
             llm_used = False
 
             if query_mode == "global":
-                _msg2 = json.dumps({'type': 'status', 'message': 'Loading precomputed summary…'})
+                _msg2 = json.dumps({'type': 'status', 'message': 'Loading document summary and citations…'})
                 yield f"data: {_msg2}\n\n"
+
+                # Retrieve grounding chunks for the query so citations and chunk cards appear in UI
+                results = await pipeline.aretrieve(query, top_k=top_k)
+                if not results:
+                    results = await pipeline.aretrieve(GLOBAL_SUMMARY_FALLBACK_QUERY, top_k=top_k)
+                if similarity_threshold > 0 and results and isinstance(results[0], tuple):
+                    filtered = [(c, s) for c, s in results if s >= similarity_threshold]
+                    results = filtered if filtered else results
+                chunks = [res[0] if isinstance(res, tuple) else res for res in results]
 
                 async with AsyncSessionLocal() as summary_db:
                     summary_text = await SummaryService.get_summary(
@@ -688,17 +716,23 @@ async def chat_stream_endpoint(
                         config_id=config_id,
                     )
 
-                results = []
-                chunks = []
+                if summary_text and is_truncated(summary_text):
+                    logger.warning(
+                        "Cached summary for doc_id=%s appears truncated (%r); discarding and regenerating.",
+                        doc_id,
+                        summary_text[-40:] if len(summary_text) > 40 else summary_text,
+                    )
+                    summary_text = None
 
                 if not summary_text:
                     _msg3 = json.dumps({'type': 'status', 'message': 'Synthesizing document overview…'})
                     yield f"data: {_msg3}\n\n"
                     generated_summary, fallback_results, fallback_chunks = await _generate_summary_on_the_fly(pipeline)
-                    results = fallback_results
-                    chunks = fallback_chunks
+                    if not results:
+                        results = fallback_results
+                        chunks = fallback_chunks
 
-                    if generated_summary:
+                    if generated_summary and not is_truncated(generated_summary):
                         summary_text = generated_summary
                         llm_used = True
                         async with AsyncSessionLocal() as summary_db:
@@ -710,6 +744,9 @@ async def chat_stream_endpoint(
                                 summary=generated_summary,
                             )
                             await summary_db.commit()
+                    elif generated_summary:
+                        summary_text = generated_summary
+                        llm_used = True
                     else:
                         summary_text = _fallback_answer_from_chunks(query, chunks)
 

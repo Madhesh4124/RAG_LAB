@@ -299,6 +299,107 @@ class PDFStructureLoader:
         return pages, total_pages
 
     @staticmethod
+    def _load_with_pdfplumber(
+        pdf_bytes: bytes,
+        filename: str,
+        skip_empty: bool,
+    ) -> tuple[List[PDFPage], int]:
+        import pdfplumber
+        from app.services.pdf_table_extractor import _df_from_table, _table_to_markdown
+
+        pages: List[PDFPage] = []
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            total_pages = len(pdf.pages)
+            for page_idx, page in enumerate(pdf.pages):
+                page_num = page_idx + 1
+
+                # 1. Detect and extract structured tables
+                tables = []
+                try:
+                    tables = page.find_tables() or []
+                except Exception as e:
+                    logger.debug("Table search error on page %d of '%s': %s", page_num, filename, e)
+
+                extracted_tables_md: List[str] = []
+                table_bboxes = []
+                for t in tables:
+                    try:
+                        table_data = t.extract()
+                        if table_data and len(table_data) >= 2:
+                            df = _df_from_table(table_data)
+                            md = _table_to_markdown(df)
+                            if md.strip():
+                                extracted_tables_md.append(md.strip())
+                                if hasattr(t, "bbox") and t.bbox:
+                                    table_bboxes.append(t.bbox)
+                    except Exception as exc:
+                        logger.debug("Table extract error on page %d of '%s': %s", page_num, filename, exc)
+
+                # Fallback: if find_tables found nothing, try extract_tables
+                if not extracted_tables_md:
+                    try:
+                        raw_tables = page.extract_tables() or []
+                        for t in raw_tables:
+                            if t and len(t) >= 2:
+                                df = _df_from_table(t)
+                                md = _table_to_markdown(df)
+                                if md.strip():
+                                    extracted_tables_md.append(md.strip())
+                    except Exception:
+                        pass
+
+                # 2. Extract non-table text
+                if table_bboxes:
+                    def _not_in_tables(obj: Dict[str, Any]) -> bool:
+                        x0 = obj.get("x0", 0)
+                        x1 = obj.get("x1", 0)
+                        top = obj.get("top", 0)
+                        bottom = obj.get("bottom", 0)
+                        for bbox in table_bboxes:
+                            if (x0 >= bbox[0] - 2 and x1 <= bbox[2] + 2 and
+                                top >= bbox[1] - 2 and bottom <= bbox[3] + 2):
+                                return False
+                        return True
+
+                    try:
+                        clean_page = page.filter(_not_in_tables)
+                        page_text = clean_page.extract_text() or ""
+                    except Exception:
+                        page_text = page.extract_text() or ""
+                else:
+                    page_text = page.extract_text() or ""
+
+                # 3. Assemble full page text with clean Markdown tables
+                parts: List[str] = []
+                if page_text.strip():
+                    parts.append(page_text.strip())
+                for t_idx, t_md in enumerate(extracted_tables_md, start=1):
+                    parts.append(f"\n\n[Table {t_idx} on Page {page_num}]\n{t_md}\n")
+
+                full_text = normalize_extracted_text("\n".join(parts))
+
+                if skip_empty and not full_text.strip():
+                    continue
+
+                page_metadata = {
+                    "page": page_num,
+                    "filename": filename,
+                    "page_0_indexed": page_idx,
+                    "source_parser": "pdfplumber",
+                    "tables_detected": len(extracted_tables_md),
+                }
+
+                pages.append(
+                    PDFPage(
+                        page_num=page_idx,
+                        text=full_text,
+                        metadata=page_metadata,
+                    )
+                )
+
+        return pages, total_pages
+
+    @staticmethod
     def load_from_bytes(
         pdf_bytes: bytes,
         filename: str = "document.pdf",
@@ -338,7 +439,16 @@ class PDFStructureLoader:
                 )
                 pages, total_pages = PDFStructureLoader._load_with_pypdf(pdf_bytes, filename, skip_empty)
         else:
-            pages, total_pages = PDFStructureLoader._load_with_pypdf(pdf_bytes, filename, skip_empty)
+            # "auto" or "pdfplumber": prefer pdfplumber for table & layout preservation
+            try:
+                pages, total_pages = PDFStructureLoader._load_with_pdfplumber(pdf_bytes, filename, skip_empty)
+                logger.info("PDF '%s' loaded via pdfplumber (%d pages, tables preserved)", filename, len(pages))
+            except ImportError:
+                logger.info("pdfplumber is not installed; falling back to pypdf")
+                pages, total_pages = PDFStructureLoader._load_with_pypdf(pdf_bytes, filename, skip_empty)
+            except Exception as e:
+                logger.warning("pdfplumber failed for '%s', falling back to pypdf: %s", filename, e)
+                pages, total_pages = PDFStructureLoader._load_with_pypdf(pdf_bytes, filename, skip_empty)
             if not _pypdf_text_quality_ok(pages, total_pages):
                 try:
                     odl_pages = PDFStructureLoader._load_with_opendataloader(pdf_bytes, filename, skip_empty)

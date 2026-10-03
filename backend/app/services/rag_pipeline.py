@@ -250,28 +250,14 @@ class RAGPipeline:
         )
 
     def index_pdf_images(self, pdf_content: Any, filename: str, doc_id: str, base_metadata: Dict[str, Any]) -> None:
-        """Extract PDF images and index them in a sibling image vector collection.
+        """Extract PDF images and index them in the active vector store and sparse retriever.
 
-        This is intentionally opt-in because the local CLIP model may download
-        weights on first use. Enable with ``PDF_IMAGE_INDEXING_ENABLED=true``.
+        Image chunks include descriptive captions and figure titles, allowing standard
+        dense text embedders and BM25 to retrieve them when users ask about diagrams/figures.
+        If ``PDF_IMAGE_INDEXING_ENABLED=true``, also indexes into a dedicated CLIP collection.
         """
-        if os.getenv("PDF_IMAGE_INDEXING_ENABLED", "false").strip().lower() not in {"1", "true", "yes", "on"}:
-            return
-
-        collection_name = getattr(self.vectorstore, "collection_name", None)
-        if not collection_name:
-            logger.warning("Skipping image indexing because the vectorstore has no collection_name")
-            return
-
         try:
-            from app.services.embedding.clip_image_embedder import CLIPImageEmbedder
-            from app.services.vectorstore.chroma_store import ChromaStore
             from app.utils.file_processor import FileProcessor
-
-            image_store = ChromaStore(collection_name=f"{collection_name}_images")
-            if hasattr(image_store, "is_document_indexed") and image_store.is_document_indexed(doc_id=doc_id):
-                return
-
             image_chunks = FileProcessor.extract_pdf_images(pdf_content, filename)
             if not image_chunks:
                 logger.info("No PDF images found for document %s", doc_id)
@@ -283,15 +269,27 @@ class RAGPipeline:
                 chunk.metadata["doc_id"] = doc_id
                 chunk.metadata["chunk_index_global"] = global_idx
                 chunk.metadata["chunk_index"] = global_idx
-                chunk.metadata["image_collection_name"] = image_store.collection_name
 
-            image_store.add_chunks(chunks=image_chunks, embedder=CLIPImageEmbedder())
-            logger.info(
-                "Indexed %d image chunk(s) for document %s into collection %s",
-                len(image_chunks),
-                doc_id,
-                image_store.collection_name,
-            )
+            # 1. Index image chunks with their caption/title into the active text vectorstore & sparse retriever
+            if self.vectorstore and hasattr(self.vectorstore, "add_chunks"):
+                self.vectorstore.add_chunks(chunks=image_chunks, embedder=self.embedder)
+            if self.retriever and hasattr(self.retriever, "index"):
+                self.retriever.index(image_chunks)
+
+            # 2. If multimodal CLIP indexing is explicitly requested, also index into sibling _images store
+            if os.getenv("PDF_IMAGE_INDEXING_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}:
+                collection_name = getattr(self.vectorstore, "collection_name", None)
+                if collection_name:
+                    from app.services.embedding.clip_image_embedder import CLIPImageEmbedder
+                    from app.services.vectorstore.chroma_store import ChromaStore
+
+                    image_store = ChromaStore(collection_name=f"{collection_name}_images")
+                    for chunk in image_chunks:
+                        chunk.metadata["image_collection_name"] = image_store.collection_name
+                    image_store.add_chunks(chunks=image_chunks, embedder=CLIPImageEmbedder())
+                    logger.info("Indexed %d image chunk(s) into CLIP collection %s", len(image_chunks), image_store.collection_name)
+
+            logger.info("Indexed %d PDF image chunk(s) for document %s", len(image_chunks), doc_id)
         except Exception as exc:
             logger.warning("PDF image indexing failed for '%s': %s", filename, exc)
 

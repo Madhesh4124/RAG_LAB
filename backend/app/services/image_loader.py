@@ -40,6 +40,8 @@ class PDFImageLoader:
         storage = get_file_storage()
         chunks: List[Chunk] = []
 
+        import re
+
         for page_idx, page in enumerate(reader.pages):
             try:
                 page_images = list(getattr(page, "images", []) or [])
@@ -51,6 +53,18 @@ class PDFImageLoader:
                     exc,
                 )
                 continue
+
+            # Extract possible figure captions from page text
+            page_text = ""
+            try:
+                page_text = page.extract_text() or ""
+            except Exception:
+                pass
+
+            captions = [
+                line.strip() for line in page_text.splitlines()
+                if re.match(r"^(figure|fig\.|chart|diagram|illustration|plot)\s*[\d.:]", line.strip(), re.IGNORECASE)
+            ]
 
             for image_idx, image_obj in enumerate(page_images):
                 try:
@@ -86,6 +100,13 @@ class PDFImageLoader:
                 storage_key = storage.save(image_bytes, extension=extension)
                 digest = hashlib.sha256(image_bytes).hexdigest()
 
+                caption = captions[image_idx] if image_idx < len(captions) else (captions[0] if captions else "")
+                figure_title = caption if caption else f"Figure {image_idx + 1} (Page {page_idx + 1})"
+                descriptive_text = (
+                    f"[{figure_title}] {caption or f'Visual figure or diagram from {filename} page {page_idx + 1}'}\n"
+                    f"image://{storage_key}"
+                )
+
                 metadata: Dict[str, Any] = {
                     "filename": filename,
                     "file_type": "pdf",
@@ -99,15 +120,17 @@ class PDFImageLoader:
                     "image_height": height,
                     "image_format": image_meta.get("format"),
                     "content_hash": digest,
+                    "caption": caption,
+                    "section_heading": figure_title,
                     "source_parser": "pypdf_image",
                 }
 
                 chunks.append(
                     Chunk(
-                        text=f"image://{storage_key}",
+                        text=descriptive_text,
                         metadata=metadata,
                         start_char=0,
-                        end_char=0,
+                        end_char=len(descriptive_text),
                     )
                 )
 

@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { IconSparkle, IconImage, IconChevronRight, IconDocument } from "../common/Icons";
+import { BASE_URL } from "../../services/api";
 
 const scoreStyle = (score) => {
   if (score === null || score === undefined) return "text-zinc-500 border-zinc-800 bg-zinc-900";
@@ -114,17 +115,17 @@ export default function MessageList({ messages }) {
                               </div>
                               <div className="rounded border border-zinc-800 bg-zinc-900 p-1">
                                 <img
-                                  src={chunk.image_url}
+                                  src={chunk.image_url.startsWith("http") ? chunk.image_url : `${BASE_URL}${chunk.image_url}`}
                                   alt={chunk.section_heading || "Extracted figure"}
-                                  className="max-h-48 w-auto object-contain rounded"
+                                  className="max-h-56 w-auto object-contain rounded"
                                   onError={(e) => { e.currentTarget.style.display = "none"; }}
                                 />
                               </div>
                             </div>
                           ) : (
-                            <p className="font-mono text-[11px] text-zinc-300 leading-relaxed line-clamp-4 bg-zinc-900/50 p-2 rounded border border-zinc-800/40">
+                            <div className="font-mono text-[11px] text-zinc-300 leading-relaxed bg-zinc-900/50 p-2.5 rounded border border-zinc-800/40 overflow-x-auto max-h-64 whitespace-pre-wrap">
                               {chunk.text}
-                            </p>
+                            </div>
                           )}
                         </div>
                       );

@@ -19,7 +19,10 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error?.response?.status === 401) {
-      localStorage.removeItem("raglab_token");
+      const url = error.config?.url || "";
+      if (!url.includes("/api/auth/login")) {
+        localStorage.removeItem("raglab_token");
+      }
     }
     return Promise.reject(error);
   }

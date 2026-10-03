@@ -39,7 +39,7 @@ describe("App routing", () => {
 
     render(<App />);
 
-    expect(await screen.findByText("Sign in to continue")).toBeInTheDocument();
+    expect(await screen.findByText("Sign in to RAG Lab")).toBeInTheDocument();
   });
 
   it("navigates mode select to chat when authenticated", async () => {
@@ -52,10 +52,10 @@ describe("App routing", () => {
 
     render(<App />);
 
-    await user.click(screen.getByRole("button", { name: "Chat mode" }));
+    await user.click(screen.getByText("Quick Chat"));
 
     expect(
-      await screen.findByText("Choose a document and start chatting with the best preset automatically applied."),
+      await screen.findByText("Document Chat Workspace"),
     ).toBeInTheDocument();
   });
 });

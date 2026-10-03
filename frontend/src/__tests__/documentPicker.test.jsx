@@ -40,9 +40,9 @@ describe("DocumentPicker", () => {
 
     render(<DocumentPicker value="" onSelect={vi.fn()} />);
 
-    await screen.findByPlaceholderText("Search by filename");
+    await screen.findByPlaceholderText(/Search by filename/i);
 
-    fireEvent.change(screen.getByPlaceholderText("Search by filename"), { target: { value: "zeta" } });
+    fireEvent.change(screen.getByPlaceholderText(/Search by filename/i), { target: { value: "zeta" } });
     fireEvent.click(screen.getByRole("button", { name: "Find" }));
 
     await waitFor(() => {

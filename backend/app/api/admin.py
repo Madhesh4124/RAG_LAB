@@ -327,4 +327,4 @@ async def db_status(current_user: User = Depends(require_admin)):
         "total_documents": total_docs,
         "documents_per_user": per_user,
         "my_recent_documents": my_docs,
-    }
+    }

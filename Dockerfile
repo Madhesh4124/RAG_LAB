@@ -53,4 +53,4 @@ ENV HOME=/home/appuser \
     CHROMA_PERSIST_DIR=/app/backend/chroma_db
 
 # Use start script to prepare DB, run migrations, then start Gunicorn.
-CMD ["/app/backend/start.sh"]
+CMD ["/bin/sh", "/app/backend/start.sh"]

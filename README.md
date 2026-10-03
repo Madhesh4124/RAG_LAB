@@ -1,8 +1,8 @@
 ---
 title: RAG Lab
 emoji: 🔬
-colorFrom: amber
-colorTo: orange
+colorFrom: blue
+colorTo: indigo
 sdk: docker
 sdk_version: latest
 app_port: 7860

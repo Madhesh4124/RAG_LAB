@@ -16,6 +16,11 @@ export default function ChatInterface({ docId, docIds = [], configId }) {
   const [deepEvaluationLoading, setDeepEvaluationLoading] = useState(false);
   const scrollRef = useRef(null);
 
+  const getAuthHeaders = () => {
+    const token = localStorage.getItem("raglab_token");
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  };
+
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -28,7 +33,8 @@ export default function ChatInterface({ docId, docIds = [], configId }) {
       if (!docId) { setMessages([]); return; }
       try {
         const response = await fetch(`${BASE_URL}/api/chat/history/${docId}`, {
-          method: "GET", credentials: "include",
+          method: "GET",
+          headers: { ...getAuthHeaders() },
         });
         if (!response.ok) return;
         const rows = await response.json();
@@ -65,8 +71,7 @@ export default function ChatInterface({ docId, docIds = [], configId }) {
     try {
       const response = await fetch(`${BASE_URL}/api/chat/stream`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
+        headers: { "Content-Type": "application/json", ...getAuthHeaders() },
         body: JSON.stringify({ query, doc_id: docId, doc_ids: docIds, config_id: configId }),
       });
       if (!response.ok) throw new Error("Stream connection failed");
@@ -118,8 +123,8 @@ export default function ChatInterface({ docId, docIds = [], configId }) {
     try {
       setLoading(true);
       await fetch(`${BASE_URL}/api/chat/reset`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        credentials: "include",
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...getAuthHeaders() },
         body: JSON.stringify({ doc_id: docId, config_id: configId }),
       });
       setMessages([]);

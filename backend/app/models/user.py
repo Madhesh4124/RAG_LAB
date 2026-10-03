@@ -2,6 +2,7 @@ import os
 import uuid
 from datetime import datetime, timezone
 
+from typing import Optional
 from pydantic import BaseModel, ConfigDict, EmailStr
 from sqlalchemy import Column, DateTime, String, Uuid, Boolean
 
@@ -48,6 +49,8 @@ class UserResponse(BaseModel):
     email: str
     created_at: datetime
     is_admin: bool = False
+    access_token: Optional[str] = None
+    token_type: Optional[str] = "bearer"
 
     model_config = ConfigDict(from_attributes=True)
 

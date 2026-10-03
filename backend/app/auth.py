@@ -135,7 +135,13 @@ def clear_auth_cookie(response: Response) -> None:
 
 
 async def get_current_user(request: Request) -> User:
-    token = request.cookies.get(SESSION_COOKIE_NAME)
+    token: str | None = None
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.lower().startswith("bearer "):
+        token = auth_header[7:].strip()
+    if not token:
+        token = request.cookies.get(SESSION_COOKIE_NAME)
+
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
 

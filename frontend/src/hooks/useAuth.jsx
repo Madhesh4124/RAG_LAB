@@ -8,11 +8,17 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
+    const token = localStorage.getItem("raglab_token");
+    if (!token) {
+      setUser(null);
+      return null;
+    }
     try {
       const { data } = await getMe();
       setUser(data || null);
       return data || null;
     } catch {
+      localStorage.removeItem("raglab_token");
       setUser(null);
       return null;
     }
@@ -36,19 +42,31 @@ export function AuthProvider({ children }) {
 
   const signup = useCallback(async (payload) => {
     const { data } = await apiSignup(payload);
+    if (data?.access_token) {
+      localStorage.setItem("raglab_token", data.access_token);
+    }
     setUser(data || null);
     return data;
   }, []);
 
   const login = useCallback(async (payload) => {
     const { data } = await apiLogin(payload);
+    if (data?.access_token) {
+      localStorage.setItem("raglab_token", data.access_token);
+    }
     setUser(data || null);
     return data;
   }, []);
 
   const logout = useCallback(async () => {
-    await apiLogout();
-    setUser(null);
+    try {
+      await apiLogout();
+    } catch {
+      // Ignore network errors during logout
+    } finally {
+      localStorage.removeItem("raglab_token");
+      setUser(null);
+    }
   }, []);
 
   const value = useMemo(

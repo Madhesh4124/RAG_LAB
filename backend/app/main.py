@@ -175,7 +175,12 @@ async def _resolve_request_user(request: Request) -> tuple[str, str]:
     user_email = "unknown"
     username = "unknown"
 
-    token = request.cookies.get("raglab_session")
+    token = None
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.lower().startswith("bearer "):
+        token = auth_header[7:].strip()
+    if not token:
+        token = request.cookies.get("raglab_session")
     if not token:
         return user_email, username
 
@@ -243,8 +248,9 @@ app.add_middleware(
     allow_origins=_cors_origins(),
     allow_origin_regex=r"https://([a-zA-Z0-9-]+\.)*(vercel\.app|hf\.space)",
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept", "X-Requested-With", "X-Request-ID"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # P3.3 — X-Request-ID middleware (must be added after CORS so it runs on every request).

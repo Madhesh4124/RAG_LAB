@@ -37,7 +37,15 @@ async def signup(payload: UserSignupRequest, response: Response, db: AsyncSessio
 
     token = create_session_token(user.id)
     set_auth_cookie(response, token)
-    return user
+    return UserResponse(
+        id=user.id,
+        username=user.username,
+        email=user.email,
+        created_at=user.created_at,
+        is_admin=user.is_admin,
+        access_token=token,
+        token_type="bearer",
+    )
 
 
 @router.post("/login", response_model=UserResponse)
@@ -50,7 +58,15 @@ async def login(payload: UserLoginRequest, response: Response, db: AsyncSession 
 
     token = create_session_token(user.id)
     set_auth_cookie(response, token)
-    return user
+    return UserResponse(
+        id=user.id,
+        username=user.username,
+        email=user.email,
+        created_at=user.created_at,
+        is_admin=user.is_admin,
+        access_token=token,
+        token_type="bearer",
+    )
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)

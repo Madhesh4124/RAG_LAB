@@ -4,7 +4,26 @@ const rawEnvBaseUrl = (import.meta.env.VITE_API_URL || "http://localhost:8000").
 const resolvedBaseUrl = rawEnvBaseUrl;
 
 export const BASE_URL = resolvedBaseUrl.replace(/\/+$/, "");
-export const api = axios.create({ baseURL: BASE_URL, withCredentials: true });
+export const api = axios.create({ baseURL: BASE_URL });
+
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem("raglab_token");
+  if (token) {
+    config.headers = config.headers || {};
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error?.response?.status === 401) {
+      localStorage.removeItem("raglab_token");
+    }
+    return Promise.reject(error);
+  }
+);
 
 // ── Auth ────────────────────────────────────────────────────────
 export const signup = (payload) => api.post("/api/auth/signup", payload);

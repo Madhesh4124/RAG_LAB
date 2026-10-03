@@ -153,7 +153,14 @@ async def _seed_sample_user(db: AsyncSession) -> User:
 
 
 async def _backfill_user_ids(db: AsyncSession, admin_user_id: uuid.UUID) -> None:
-    uid = str(admin_user_id)
+    uid = admin_user_id.hex if hasattr(admin_user_id, "hex") else str(admin_user_id).replace("-", "")
+
+    # Normalize any legacy hyphenated user_ids in SQLite
+    for table in ("documents", "rag_configs", "chat_messages"):
+        try:
+            await db.execute(text(f"UPDATE {table} SET user_id = REPLACE(user_id, '-', '') WHERE user_id LIKE '%-%'"))
+        except Exception:
+            pass
 
     await db.execute(text("UPDATE documents SET user_id = :uid WHERE user_id IS NULL"), {"uid": uid})
 
@@ -190,6 +197,73 @@ async def _backfill_user_ids(db: AsyncSession, admin_user_id: uuid.UUID) -> None
     await db.commit()
 
 
+async def _migrate_deprecated_models(db: AsyncSession) -> None:
+    try:
+        await db.execute(
+            text(
+                """
+                UPDATE rag_configs
+                SET config_json = REPLACE(
+                    REPLACE(config_json, 'nvidia/nv-embed-v1', 'nvidia/nemotron-3-embed-1b'),
+                    'nvidia/llama-3.2-nemoretriever-300m-embed-v1',
+                    'nvidia/nemotron-3-embed-1b'
+                )
+                WHERE config_json LIKE '%nv-embed-v1%' OR config_json LIKE '%nemoretriever%'
+                """
+            )
+        )
+        await db.execute(
+            text(
+                """
+                UPDATE rag_configs
+                SET config_json = REPLACE(
+                    REPLACE(
+                        REPLACE(
+                            REPLACE(config_json, '"model": "gemma-4-31b-it"', '"model": "gemini-2.5-flash"'),
+                            '"model": "gemma-4-27b-it"',
+                            '"model": "gemini-2.5-flash"'
+                        ),
+                        '"model": "gemma-2-9b-it"',
+                        '"model": "gemini-2.5-flash"'
+                    ),
+                    '"model": "gemma-4-26b-a4b-it"',
+                    '"model": "gemini-2.5-flash"'
+                )
+                WHERE config_json LIKE '%gemma%'
+                """
+            )
+        )
+        await db.execute(
+            text(
+                """
+                UPDATE rag_configs
+                SET config_json = REPLACE(
+                    config_json,
+                    '"provider": "groq", "model": "gemini-2.5-flash"',
+                    '"provider": "gemini", "model": "gemini-2.5-flash"'
+                )
+                WHERE config_json LIKE '%"provider": "groq", "model": "gemini-2.5-flash"%'
+                """
+            )
+        )
+        await db.execute(
+            text(
+                """
+                UPDATE rag_configs
+                SET config_json = REPLACE(
+                    config_json,
+                    '"model": "gemini-2.0-flash-exp"',
+                    '"model": "gemini-2.5-flash"'
+                )
+                WHERE config_json LIKE '%gemini-2.0-flash-exp%'
+                """
+            )
+        )
+        await db.commit()
+    except Exception:
+        pass
+
+
 async def run_bootstrap_migrations(engine: AsyncEngine, db: AsyncSession) -> None:
     async with engine.begin() as conn:
         for table in ("documents", "rag_configs", "chat_messages"):
@@ -203,3 +277,4 @@ async def run_bootstrap_migrations(engine: AsyncEngine, db: AsyncSession) -> Non
     admin_user_id = admin_user.id  # capture before next await expires the ORM object
     await _seed_sample_user(db)
     await _backfill_user_ids(db, admin_user_id)
+    await _migrate_deprecated_models(db)

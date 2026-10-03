@@ -33,7 +33,7 @@ GLOBAL_SUMMARY_FALLBACK_QUERY = (
 
 
 def should_precompute_summaries() -> bool:
-    return os.getenv("PRECOMPUTE_SUMMARIES_ON_PREPARE", "0").strip().lower() in {
+    return os.getenv("PRECOMPUTE_SUMMARIES_ON_PREPARE", "1").strip().lower() in {
         "1",
         "true",
         "yes",
@@ -112,12 +112,21 @@ def _serialize_retrieved_chunks(results: List[Any]) -> list[dict[str, Any]]:
             score = getattr(chunk, "score", 0.0)
 
         chunk_metadata = getattr(chunk, "metadata", {}) or {}
+        raw_text = getattr(chunk, "text", str(chunk))
+        is_image = chunk_metadata.get("modality") == "image" or str(raw_text).startswith("image://")
+        image_key = chunk_metadata.get("image_storage_key")
+        if not image_key and str(raw_text).startswith("image://"):
+            image_key = str(raw_text).replace("image://", "").strip()
+
         serialized.append({
             "id": str(getattr(chunk, "id", idx)),
-            "text": chunk_metadata.get("window_text") or getattr(chunk, "text", str(chunk)),
+            "text": chunk_metadata.get("window_text") or raw_text,
             "score": float(display_scores[idx]) if idx < len(display_scores) else float(score),
             "raw_score": float(score),
-            "section_heading": chunk_metadata.get("section_heading"),
+            "section_heading": chunk_metadata.get("section_heading") or (f"Figure (Page {chunk_metadata.get('page')})" if is_image and chunk_metadata.get('page') else None),
+            "modality": "image" if is_image else "text",
+            "image_url": f"/api/documents/images/{image_key}" if (is_image and image_key) else None,
+            "metadata": chunk_metadata,
         })
     return serialized
 
@@ -175,7 +184,7 @@ async def _precompute_summary_background(
 
 
 async def _generate_summary_on_the_fly(pipeline: Any) -> tuple[str | None, List[Any], List[Any]]:
-    fallback_results = await pipeline.aretrieve(query=GLOBAL_SUMMARY_FALLBACK_QUERY, top_k=30)
+    fallback_results = await pipeline.aretrieve(query=GLOBAL_SUMMARY_FALLBACK_QUERY, top_k=6)
     fallback_chunks = _extract_chunks(fallback_results)
     summary = await SummaryService.generate_doc_summary(
         chunks=fallback_chunks,
@@ -249,6 +258,29 @@ async def _run_indexing_background(
                         metadata={"filename": doc.filename, "file_type": doc.file_type},
                     )
                 IndexingJobStore.update(job_id, progress_pct=int((i + 1) / total * 100))
+
+            if should_precompute_summaries():
+                try:
+                    async with AsyncSessionLocal() as summary_db:
+                        for doc in docs:
+                            summary_text = doc.content
+                            if doc.file_type.lower() == "pdf":
+                                summary_text = FileProcessor.extract_pdf_text_fallback(doc.content, doc.filename)
+                            chunks = pipeline.chunker.chunk(
+                                text=summary_text,
+                                metadata={"filename": doc.filename, "file_type": doc.file_type},
+                            )
+                            await SummaryService.ensure_precomputed_summary(
+                                db=summary_db,
+                                user_id=uuid.UUID(user_id),
+                                document_id=doc.id,
+                                config_id=uuid.UUID(config_id),
+                                chunks=chunks,
+                                llm_client=getattr(pipeline, "llm_client", None),
+                            )
+                        await summary_db.commit()
+                except Exception as sum_exc:
+                    logger.warning("[job=%s] Summary precomputation during indexing failed: %s", job_id, sum_exc)
 
         IndexingJobStore.update(job_id, status="ready", progress_pct=100)
     except Exception as exc:
@@ -445,6 +477,13 @@ async def chat_endpoint(
         else:
             timer.start("retrieval_time_ms")
             retrieved_results = await pipeline.aretrieve(query, top_k=top_k)
+            if hasattr(pipeline, "aretrieve_images"):
+                try:
+                    image_results = await pipeline.aretrieve_images(query, top_k=2)
+                    if image_results:
+                        retrieved_results = list(retrieved_results) + list(image_results)
+                except Exception as img_exc:
+                    logger.debug("Multimodal image retrieval skipped: %s", img_exc)
             logger.info(
                 "Chat retrieval completed config_id=%s requested_top_k=%s returned=%d",
                 config_id,

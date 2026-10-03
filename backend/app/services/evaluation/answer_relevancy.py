@@ -16,10 +16,14 @@ class AnswerRelevancyEvaluator:
             "to 1.0 (perfectly answers the question). Reply with ONLY a decimal number."
         )
 
-        response = llm_client.llm.invoke(prompt)
-        raw_content = getattr(response, "content", "")
-        from app.services.evaluation.retrieval_metrics import _extract_text_content
-        content = _extract_text_content(raw_content).strip()
+        if hasattr(llm_client, "invoke_prompt"):
+            content = llm_client.invoke_prompt(prompt).strip()
+            raw_content = content
+        else:
+            response = llm_client.llm.invoke(prompt)
+            raw_content = getattr(response, "content", "")
+            from app.services.evaluation.retrieval_metrics import _extract_text_content
+            content = _extract_text_content(raw_content).strip()
         import logging
         logging.getLogger(__name__).warning("AnswerRelevancyEvaluator raw: %r, extracted: %r", raw_content, content)
         score = self._parse_score(content)

@@ -24,10 +24,14 @@ class ContextQualityEvaluator:
             "Reply with a JSON list of true/false for each chunk.\n\n"
             f"Chunks:\n{chunks_text}"
         )
-        precision_response = llm_client.llm.invoke(precision_prompt)
-        raw_prec = getattr(precision_response, "content", "")
-        from app.services.evaluation.retrieval_metrics import _extract_text_content
-        prec_content = _extract_text_content(raw_prec).strip()
+        if hasattr(llm_client, "invoke_prompt"):
+            prec_content = llm_client.invoke_prompt(precision_prompt).strip()
+            raw_prec = prec_content
+        else:
+            precision_response = llm_client.llm.invoke(precision_prompt)
+            raw_prec = getattr(precision_response, "content", "")
+            from app.services.evaluation.retrieval_metrics import _extract_text_content
+            prec_content = _extract_text_content(raw_prec).strip()
         import logging
         logging.getLogger(__name__).warning("ContextQualityEvaluator precision raw: %r, extracted: %r", raw_prec, prec_content)
         
@@ -40,9 +44,13 @@ class ContextQualityEvaluator:
             "additional context beyond what's in these chunks? "
             "Score 0.0-1.0 where 1.0 means the chunks fully cover what's needed."
         )
-        recall_response = llm_client.llm.invoke(recall_prompt)
-        raw_recall = getattr(recall_response, "content", "")
-        recall_content = _extract_text_content(raw_recall).strip()
+        if hasattr(llm_client, "invoke_prompt"):
+            recall_content = llm_client.invoke_prompt(recall_prompt).strip()
+            raw_recall = recall_content
+        else:
+            recall_response = llm_client.llm.invoke(recall_prompt)
+            raw_recall = getattr(recall_response, "content", "")
+            recall_content = _extract_text_content(raw_recall).strip()
         logging.getLogger(__name__).warning("ContextQualityEvaluator recall raw: %r, extracted: %r", raw_recall, recall_content)
         
         context_recall = self._parse_score(recall_content)

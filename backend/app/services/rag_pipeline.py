@@ -345,6 +345,28 @@ class RAGPipeline:
     async def aretrieve(self, query: str, top_k: int = 5) -> List[Tuple[Chunk, float]]:
         return await asyncio.to_thread(self.retrieve, query, top_k)
 
+    def retrieve_images(self, query: str, top_k: int = 2) -> List[Tuple[Chunk, float]]:
+        """Retrieve visually relevant image chunks from the sibling image collection."""
+        collection_name = getattr(self.vectorstore, "collection_name", None)
+        if not collection_name:
+            return []
+        try:
+            from app.services.embedding.clip_image_embedder import CLIPImageEmbedder
+            from app.services.vectorstore.chroma_store import ChromaStore
+
+            image_store = ChromaStore(collection_name=f"{collection_name}_images")
+            if not getattr(image_store, "collection", None) or image_store.collection.count() == 0:
+                return []
+            embedder = CLIPImageEmbedder()
+            return image_store.search(query=query, embedder=embedder, top_k=top_k)
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).debug("Image retrieval skipped or failed: %s", exc)
+            return []
+
+    async def aretrieve_images(self, query: str, top_k: int = 2) -> List[Tuple[Chunk, float]]:
+        return await asyncio.to_thread(self.retrieve_images, query, top_k)
+
     def generate(self, query: str, chunks: List[Any], llm_client: Optional[GeminiClient] = None) -> str:
         """Generation bridge wrapping contexts dynamically before pinging any LLM native interfaces."""
         self.timer.start("llm_time_ms")

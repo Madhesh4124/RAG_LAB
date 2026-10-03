@@ -60,10 +60,10 @@ class HuggingFaceAPIReranker:
     def __init__(
         self,
         model: str = "BAAI/bge-reranker-v2-m3",
-        timeout_seconds: int = 10,
-        max_candidates: int = 20,
+        timeout_seconds: int = 5,
+        max_candidates: int = 6,
         max_workers: int = 4,
-        min_candidates: int = 8,
+        min_candidates: int = 3,
     ):
         self.model_name = model
         self.timeout_seconds = timeout_seconds
@@ -128,14 +128,19 @@ class HuggingFaceAPIReranker:
         if not texts:
             return []
 
+        # HF router inference endpoint accepts a list of text pairs under inputs
         payload_options = [
-            {"inputs": {"source_sentence": query, "sentences": texts}},
             {"inputs": [{"text": query, "text_pair": text} for text in texts]},
+            {"inputs": {"source_sentence": query, "sentences": texts}},
         ]
 
         for payload in payload_options:
             try:
                 response = self._call_api(payload)
+                # Unpack nested list if returned as [[{...}, {...}]]
+                if isinstance(response, list) and len(response) == 1 and isinstance(response[0], list):
+                    response = response[0]
+
                 if isinstance(response, list):
                     # Common response forms:
                     # - [float, float, ...]
@@ -155,16 +160,16 @@ class HuggingFaceAPIReranker:
 
     def _score_pair(self, query: str, text: str) -> float:
         payload_options = [
+            {"inputs": [{"text": query, "text_pair": text}]},
             {"inputs": {"text": query, "text_pair": text}},
             {"inputs": [query, text]},
-            {"inputs": f"{query} [SEP] {text}"},
         ]
 
         for payload in payload_options:
             try:
                 response = self._call_api(payload)
                 if isinstance(response, list) and response:
-                    return self._extract_score(response)
+                    return self._extract_score(response[0] if isinstance(response[0], (dict, list, int, float)) else response)
                 return self._extract_score(response)
             except Exception:
                 continue

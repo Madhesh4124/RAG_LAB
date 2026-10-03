@@ -211,7 +211,7 @@ class FileProcessor:
         """
         if isinstance(pdf_content, str):
             # Legacy DB rows may already contain flattened text rather than PDF bytes.
-            if "%PDF-" not in pdf_content[:64]:
+            if not pdf_content.startswith("pdf://") and "%PDF-" not in pdf_content[:64]:
                 stripped = pdf_content.strip()
                 if stripped:
                     return normalize_extracted_text(stripped)

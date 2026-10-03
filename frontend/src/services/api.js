@@ -29,6 +29,9 @@ export const listDocuments = (params = {}) => api.get("/api/documents/list", { p
 export const searchDocuments = (query, limit = 50) =>
   api.get("/api/documents/search", { params: { query, limit } });
 export const deleteDocument = (docId) => api.delete(`/api/documents/${docId}`);
+export const clearAllDocuments = () => api.delete("/api/documents/all");
+export const bulkDeleteDocuments = (documentIds) =>
+  api.post("/api/documents/bulk-delete", { document_ids: documentIds });
 
 // ── Config ──────────────────────────────────────────────────────
 export const saveConfig  = (cfg)      => api.post("/api/config", cfg);

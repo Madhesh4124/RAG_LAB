@@ -1,18 +1,20 @@
-name: Ping HF Space
+name: Keep HuggingFace Space Awake
 
 on:
   schedule:
-    - cron: "0 */12 * * *"
+    # Run every 6 hours to ensure the HF Space container never idles out
+    - cron: "0 */6 * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  ping:
+  ping-space:
+    name: Ping HF Space Health
     runs-on: ubuntu-latest
     steps:
-      - name: Ping HF Space
+      - name: Ping Backend Liveness Endpoint
         env:
           HF_SPACE_URL: ${{ vars.HF_SPACE_URL }}
           HF_SPACE_PING_PATH: ${{ vars.HF_SPACE_PING_PATH }}
@@ -20,33 +22,36 @@ jobs:
         run: |
           set -euo pipefail
           url="${HF_SPACE_URL:-https://madhesh4124-rag-backend.hf.space}"
-          path="${HF_SPACE_PING_PATH:-/}"
+          path="${HF_SPACE_PING_PATH:-/health}"
           full_url="${url%/}${path}"
 
           auth_args=()
           if [[ -n "${HF_TOKEN:-}" ]]; then
             auth_args=(-H "Authorization: Bearer ${HF_TOKEN}")
-            echo "Pinging ${full_url} with token auth"
+            echo "Pinging ${full_url} with token authentication..."
           else
-            echo "Pinging ${full_url} without token auth"
+            echo "Pinging ${full_url} without token authentication..."
           fi
 
+          # Allow up to 90s max-time to accommodate cold-starts if the space was asleep
           code=$(curl --show-error --silent --location \
-            --retry 3 --retry-delay 5 --max-time 30 \
+            --retry 3 --retry-delay 10 --max-time 90 \
+            -A "RAGLab-KeepAlive-Bot/1.0" \
             "${auth_args[@]}" \
             --output /dev/null --write-out "%{http_code}" \
             "${full_url}")
 
-          echo "Response code: ${code}"
+          echo "HTTP response status: ${code}"
 
           if [[ "${code}" =~ ^[23] ]]; then
+            echo "Successfully pinged HF Space! Backend is active."
             exit 0
           fi
 
-          if [[ -z "${HF_TOKEN:-}" && ( "${code}" == "401" || "${code}" == "403" || "${code}" == "404" ) ]]; then
-            echo "Space likely private or gated from unauthenticated requests; treating as successful ping."
+          if [[ -z "${HF_TOKEN:-}" && ( "${code}" == "401" || "${code}" == "403" ) ]]; then
+            echo "Space is gated or private, but server responded; treating as successful ping."
             exit 0
           fi
 
-          echo "Ping failed with HTTP ${code}"
+          echo "Error: Ping failed with status ${code}"
           exit 1

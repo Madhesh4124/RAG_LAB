@@ -1,3 +1,4 @@
+import os
 import json
 import logging
 import asyncio
@@ -93,14 +94,29 @@ def _chunks_from_payload(raw_chunks):
     return chunks
 
 
+def _get_eval_llm_client(fallback_client=None):
+    eval_provider = os.getenv("EVALUATION_LLM_PROVIDER", "groq")
+    if eval_provider == "groq":
+        try:
+            from app.services.llm.groq_client import GroqClient
+            eval_model = os.getenv("EVALUATION_LLM_MODEL", "openai/gpt-oss-20b")
+            client = GroqClient(model=eval_model, temperature=0.0)
+            if getattr(client, "llm", None) is not None:
+                return client
+        except Exception as e:
+            logger.warning("Failed to initialize Groq evaluation client: %s", e)
+    return fallback_client
+
+
 def score_message(
     db: AsyncSession,
     assistant_msg: ChatMessage,
     query_text: str,
-    llm_client,
+    llm_client=None,
     chunks: list[Chunk] | None = None,
 ) -> EvaluationResult:
-    if llm_client is None or getattr(llm_client, "llm", None) is None:
+    eval_client = _get_eval_llm_client(llm_client)
+    if eval_client is None or getattr(eval_client, "llm", None) is None:
         raise EvaluationServiceUnavailableError("LLM client is unavailable for evaluation")
 
     parsed_chunks = chunks if chunks is not None else _chunks_from_payload(assistant_msg.retrieved_chunks or [])
@@ -110,7 +126,7 @@ def score_message(
             query=query_text,
             answer=assistant_msg.content,
             chunks=parsed_chunks,
-            llm_client=llm_client,
+            llm_client=eval_client,
         )
     except Exception:
         logger.warning("Faithfulness evaluation failed for message_id=%s", assistant_msg.id, exc_info=True)
@@ -120,7 +136,7 @@ def score_message(
         answer_relevancy = AnswerRelevancyEvaluator().evaluate(
             query=query_text,
             answer=assistant_msg.content,
-            llm_client=llm_client,
+            llm_client=eval_client,
         )
     except Exception:
         logger.warning("Answer relevancy evaluation failed for message_id=%s", assistant_msg.id, exc_info=True)
@@ -131,7 +147,7 @@ def score_message(
             query=query_text,
             answer=assistant_msg.content,
             chunks=parsed_chunks,
-            llm_client=llm_client,
+            llm_client=eval_client,
         )
     except Exception:
         logger.warning("Context quality evaluation failed for message_id=%s", assistant_msg.id, exc_info=True)
@@ -269,21 +285,23 @@ async def build_message_evaluation_report(
         candidate_results = await pipeline.aretrieve(user_msg.content, top_k=pool_k)
         candidate_chunks = [item[0] if isinstance(item, tuple) else item for item in candidate_results] or retrieved_chunks
 
+    eval_client = _get_eval_llm_client(llm_client)
+
     unified_result = None
-    if deep and llm_client is not None:
+    if deep and eval_client is not None:
         try:
             unified_result = unified_deep_evaluation(
                 query=user_msg.content,
                 answer=msg.content,
                 retrieved_chunks=retrieved_chunks,
                 candidate_chunks=candidate_chunks,
-                llm_client=llm_client,
+                llm_client=eval_client,
             )
         except Exception as e:
             err_msg = str(e)
             if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "quota" in err_msg.lower():
                 raise EvaluationServiceUnavailableError(
-                    "Gemini API quota limit exceeded or rate limit hit. Please check your Google AI Studio quota limits or retry in a few seconds."
+                    "API quota limit exceeded or rate limit hit. Please retry in a few seconds."
                 )
             logger.error("Failed to run unified deep evaluation: %s", e, exc_info=True)
 
@@ -293,7 +311,7 @@ async def build_message_evaluation_report(
             answer=msg.content,
             retrieved_chunks=retrieved_chunks,
             candidate_chunks=candidate_chunks,
-            llm_client=llm_client,
+            llm_client=eval_client,
             embedder=embedder,
             retrieval_config=retrieval_config,
             query_mode=query_mode,
@@ -306,7 +324,7 @@ async def build_message_evaluation_report(
             answer=msg.content,
             retrieved_chunks=retrieved_chunks,
             candidate_chunks=candidate_chunks,
-            llm_client=llm_client,
+            llm_client=eval_client,
             embedder=embedder,
             retrieval_config=retrieval_config,
             query_mode=query_mode,

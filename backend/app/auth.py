@@ -94,13 +94,15 @@ def _cookie_settings() -> tuple[bool, str]:
     cookie_samesite = os.getenv("COOKIE_SAMESITE")
 
     if cookie_secure is None:
-        # Default to secure cookies in deployments (HF Spaces / Vercel).
-        cookie_secure_bool = True
+        frontend = os.getenv("FRONTEND_URL", "").lower()
+        if "http://localhost" in frontend or "http://127.0.0.1" in frontend or not frontend:
+            cookie_secure_bool = False
+        else:
+            cookie_secure_bool = True
     else:
-        cookie_secure_bool = cookie_secure.lower() != "false"
+        cookie_secure_bool = cookie_secure.lower() not in {"false", "0", "no"}
 
     if cookie_samesite is None:
-        # Cross-site frontend->backend calls require SameSite=None.
         cookie_samesite_value = "none" if cookie_secure_bool else "lax"
     else:
         cookie_samesite_value = cookie_samesite.lower()

@@ -5,6 +5,7 @@ Uses LangChain's NVIDIAEmbeddings to produce vector
 embeddings via NVIDIA's text-embedding models.
 """
 
+import logging
 import os
 from typing import Any, Dict, List
 
@@ -13,27 +14,44 @@ from langchain_nvidia_ai_endpoints import NVIDIAEmbeddings
 
 from app.services.embedding.base import BaseEmbedder
 
+logger = logging.getLogger(__name__)
 load_dotenv()
+
+
+DEPRECATED_NVIDIA_MODELS = {
+    "nvidia/nv-embed-v1": "nvidia/nemotron-3-embed-1b",
+    "nvidia/llama-3.2-nemoretriever-300m-embed-v1": "nvidia/nemotron-3-embed-1b",
+    "nv-embed-v1": "nvidia/nemotron-3-embed-1b",
+}
 
 
 class NvidiaEmbedder(BaseEmbedder):
     """Embedder backed by NVIDIA AI Endpoints (via LangChain).
 
     Supported models include:
-      - nvidia/nv-embed-v1
-      - nvidia/llama-3.2-nemoretriever-300m-embed-v1
+      - nvidia/nemotron-3-embed-1b (active default)
 
     Args:
         model: The NVIDIA embedding model identifier.
-               Defaults to ``"nvidia/nv-embed-v1"``.
+               Defaults to ``"nvidia/nemotron-3-embed-1b"``.
 
     Raises:
         ValueError: If *NVIDIA_API_KEY* is not set in the environment
                     or ``.env`` file.
     """
 
-    def __init__(self, model: str = "nvidia/nv-embed-v1") -> None:
-        self.model = model
+    def __init__(self, model: str = None) -> None:
+        raw_model = model or os.getenv("DEFAULT_EMBEDDING_MODEL", "nvidia/nemotron-3-embed-1b")
+        if raw_model in DEPRECATED_NVIDIA_MODELS:
+            mapped_model = DEPRECATED_NVIDIA_MODELS[raw_model]
+            logger.warning(
+                "NVIDIA model %s is end-of-life; automatically using %s",
+                raw_model,
+                mapped_model,
+            )
+            self.model = mapped_model
+        else:
+            self.model = raw_model
 
         api_key = os.getenv("NVIDIA_API_KEY")
         if not api_key:

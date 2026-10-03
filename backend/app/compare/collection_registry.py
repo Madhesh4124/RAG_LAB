@@ -97,7 +97,7 @@ def _load_embedder(embedding_provider: str, embedding_model: str):
         return cached
 
     if embedding_provider == "nvidia":
-        model_name = embedding_model or "nvidia/nv-embed-v1"
+        model_name = embedding_model or "nvidia/nemotron-3-embed-1b"
         embedder = _EmbeddingAdapter(NvidiaEmbedder(model=model_name))
     elif embedding_provider == "huggingface":
         model_name = embedding_model or "sentence-transformers/all-MiniLM-L6-v2"
@@ -155,12 +155,27 @@ def get_or_load_collection(
 def collection_exists(
     collection_name: str,
     embedding_provider: str = "nvidia",
-    embedding_model: str = "nvidia/nv-embed-v1",
+    embedding_model: str = "nvidia/nemotron-3-embed-1b",
     user_scope: str | None = None,
 ) -> bool:
     try:
         vectorstore = get_or_load_collection(collection_name, embedding_provider, embedding_model, user_scope=user_scope)
-        return int(vectorstore._collection.count()) > 0
+        count = int(vectorstore._collection.count())
+        if count == 0:
+            return False
+        # Purge collections containing broken 'pdf://' storage placeholders from earlier bug
+        try:
+            peek_res = vectorstore._collection.peek(limit=min(count, 5))
+            docs = peek_res.get("documents", [])
+            if docs and any(str(d).strip().startswith("pdf://") for d in docs):
+                try:
+                    vectorstore.delete_collection()
+                except Exception:
+                    pass
+                return False
+        except Exception:
+            pass
+        return True
     except Exception:
         return False
 

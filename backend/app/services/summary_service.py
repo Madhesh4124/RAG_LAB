@@ -144,18 +144,41 @@ class SummaryService:
             timeout_s = float(os.getenv("DOC_SUMMARY_LLM_TIMEOUT_SECONDS", "45"))
         except (ValueError, TypeError):
             timeout_s = 45.0
-            
+
+        if hasattr(llm_client, "ainvoke_prompt"):
+            try:
+                result = await llm_client.ainvoke_prompt(prompt, timeout=timeout_s)
+                if result:
+                    return result
+            except Exception as e:
+                logger.warning("Summary generation via ainvoke_prompt failed: %s", e)
+
         try:
-            if hasattr(llm_client.llm, "ainvoke"):
-                response = await asyncio.wait_for(
-                    llm_client.llm.ainvoke(prompt),
-                    timeout=timeout_s,
-                )
-            else:
-                response = await asyncio.wait_for(
-                    asyncio.to_thread(llm_client.llm.invoke, prompt),
-                    timeout=timeout_s,
-                )
+            if hasattr(llm_client, "llm") and llm_client.llm:
+                if hasattr(llm_client.llm, "ainvoke"):
+                    response = await asyncio.wait_for(
+                        llm_client.llm.ainvoke(prompt),
+                        timeout=timeout_s,
+                    )
+                else:
+                    response = await asyncio.wait_for(
+                        asyncio.to_thread(llm_client.llm.invoke, prompt),
+                        timeout=timeout_s,
+                    )
+                content = getattr(response, "content", "")
+                if isinstance(content, str):
+                    return content.strip()
+                if isinstance(content, list):
+                    parts: List[str] = []
+                    for item in content:
+                        if isinstance(item, str):
+                            parts.append(item)
+                        elif isinstance(item, dict):
+                            text = item.get("text")
+                            if isinstance(text, str):
+                                parts.append(text)
+                    return "".join(parts).strip()
+                return str(content).strip()
         except asyncio.TimeoutError:
             logger.info(
                 "Summary generation timed out after %.1fs; skipping precompute for now",
@@ -165,17 +188,5 @@ class SummaryService:
         except Exception as e:
             logger.warning("Summary generation failed due to an API error: %s", e)
             return ""
-        content = getattr(response, "content", "")
-        if isinstance(content, str):
-            return content.strip()
-        if isinstance(content, list):
-            parts: List[str] = []
-            for item in content:
-                if isinstance(item, str):
-                    parts.append(item)
-                elif isinstance(item, dict):
-                    text = item.get("text")
-                    if isinstance(text, str):
-                        parts.append(text)
-            return "".join(parts).strip()
-        return str(content).strip()
+
+        return ""

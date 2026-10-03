@@ -1,17 +1,43 @@
 import json
 import os
+from pathlib import Path
 import re
 from functools import lru_cache
 from typing import Literal
+from dotenv import load_dotenv
+
+env_path = Path(__file__).resolve().parents[3] / ".env"
+load_dotenv(dotenv_path=env_path, override=True)
 
 from app.services.llm.gemini_client import GeminiClient
 
 _INTENT = Literal["global", "local"]
 
 
-def _get_classifier_client() -> GeminiClient | None:
+def _get_classifier_client():
+    groq_api_key = os.getenv("GROQ_API_KEY")
+    if groq_api_key:
+        try:
+            from app.services.llm.groq_client import GroqClient
+            eval_model = os.getenv("EVALUATION_LLM_MODEL", "openai/gpt-oss-120b")
+            client = GroqClient(
+                model=eval_model,
+                temperature=0.0,
+                system_prompt=(
+                    "You classify user queries for RAG routing. "
+                    "Return ONLY strict JSON with the schema: "
+                    '{"intent":"global|local","confidence":0.0-1.0}. '
+                    "Use global for whole-document overview/summary intent. "
+                    "Use local for specific section/page/fact/detail lookup."
+                ),
+            )
+            if getattr(client, "llm", None):
+                return client
+        except Exception:
+            pass
+
     # Separate model/env so intent routing can be tuned independently.
-    model = os.getenv("QUERY_CLASSIFIER_MODEL", os.getenv("DEFAULT_LLM_MODEL", "gemma-4-27b-it"))
+    model = os.getenv("QUERY_CLASSIFIER_MODEL", os.getenv("DEFAULT_LLM_MODEL", "gemini-2.5-flash"))
     try:
         client = GeminiClient(
             model=model,

@@ -57,7 +57,7 @@ class CLIPImageEmbedder(BaseEmbedder):
         inputs = {key: value.to(self.device) for key, value in inputs.items()}
         with torch_or_none.no_grad():
             features = model.get_text_features(**inputs)
-        return self._normalize(features[0].detach().cpu().tolist())
+        return self._normalize(self._to_1d_list(features, torch_or_none))
 
     def embed_batch(self, texts: List[str]) -> List[List[float]]:
         if not texts:
@@ -111,7 +111,7 @@ class CLIPImageEmbedder(BaseEmbedder):
         inputs = {key: value.to(self.device) for key, value in inputs.items()}
         with torch_or_none.no_grad():
             features = model.get_image_features(**inputs)
-        return self._normalize(features[0].detach().cpu().tolist())
+        return self._normalize(self._to_1d_list(features, torch_or_none))
 
     def _load_model(self):
         cache_key = f"{self.model_name}:{self.device}"
@@ -158,6 +158,30 @@ class CLIPImageEmbedder(BaseEmbedder):
         with _MODEL_CACHE_LOCK:
             _MODEL_CACHE.setdefault(cache_key, loaded)
             return _MODEL_CACHE[cache_key]
+
+    @staticmethod
+    def _to_1d_list(features: Any, torch_module: Any = None) -> List[float]:
+        # Handle HuggingFace BaseModelOutputWithPooling or raw Tensor
+        tensor = getattr(features, "pooler_output", None)
+        if tensor is None:
+            tensor = getattr(features, "text_embeds", None)
+        if tensor is None:
+            tensor = getattr(features, "image_embeds", None)
+        if tensor is None:
+            tensor = features
+
+        if torch_module is not None and isinstance(tensor, torch_module.Tensor):
+            tensor = tensor.squeeze()
+            if tensor.ndim > 1:
+                tensor = tensor[0]
+            return [float(val) for val in tensor.detach().cpu().tolist()]
+
+        if isinstance(tensor, (list, tuple)):
+            if tensor and isinstance(tensor[0], (list, tuple)):
+                return [float(val) for val in tensor[0]]
+            return [float(val) for val in tensor]
+
+        return [float(tensor)]
 
     @staticmethod
     def _normalize(vector: List[float]) -> List[float]:

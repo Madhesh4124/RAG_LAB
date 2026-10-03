@@ -1,12 +1,59 @@
 import json
 import logging
 import math
+import os
 import re
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
 from app.services.chunking.base import Chunk
+
+
+def _get_evaluator_llm(llm_client: Any = None) -> Any:
+    """Get the LLM model to use for evaluation.
+
+    Prefers the dedicated EVALUATION_LLM (Groq / openai/gpt-oss-120b) as configured in .env,
+    falling back to llm_client.fallback_client or llm_client.llm if needed.
+    """
+    if llm_client is not None:
+        target = getattr(llm_client, "llm", llm_client)
+        if "mock" in type(target).__name__.lower() or "mock" in type(llm_client).__name__.lower():
+            return target
+
+    groq_api_key = os.getenv("GROQ_API_KEY")
+    if not groq_api_key:
+        try:
+            from dotenv import load_dotenv
+            load_dotenv()
+            groq_api_key = os.getenv("GROQ_API_KEY")
+        except Exception:
+            pass
+    eval_provider = os.getenv("EVALUATION_LLM_PROVIDER", "groq")
+    eval_model = os.getenv("EVALUATION_LLM_MODEL", "openai/gpt-oss-120b")
+
+    if (eval_provider == "groq" or groq_api_key) and groq_api_key:
+        try:
+            from langchain_groq import ChatGroq
+            return ChatGroq(
+                model=eval_model,
+                temperature=0.0,
+                api_key=groq_api_key,
+                max_tokens=2048,
+                max_retries=1,
+            )
+        except Exception as e:
+            logger.warning("Could not initialize dedicated Groq evaluation LLM: %s", e)
+
+    if llm_client is not None:
+        if hasattr(llm_client, "fallback_client") and llm_client.fallback_client:
+            fb = llm_client.fallback_client
+            if hasattr(fb, "llm") and fb.llm is not None:
+                return fb.llm
+        if hasattr(llm_client, "llm") and llm_client.llm is not None:
+            return llm_client.llm
+        return llm_client
+    return None
 
 
 def _extract_text_content(content: Any) -> str:
@@ -144,7 +191,7 @@ def judge_chunk_relevance(query: str, chunks: List[Any], llm_client: Any = None)
     if not chunks:
         return []
 
-    llm = getattr(llm_client, "llm", None) if llm_client is not None else None
+    llm = _get_evaluator_llm(llm_client)
     if llm is None:
         return _heuristic_relevance(query, chunks)
 
@@ -164,8 +211,18 @@ def judge_chunk_relevance(query: str, chunks: List[Any], llm_client: Any = None)
         parsed = _parse_bool_list(getattr(response, "content", ""), expected_len=len(chunks))
         if parsed is not None:
             return parsed
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Primary evaluator failed in judge_chunk_relevance: %s", exc)
+        if hasattr(llm_client, "fallback_client") and llm_client.fallback_client:
+            fb = llm_client.fallback_client
+            if hasattr(fb, "llm") and fb.llm is not None and fb.llm != llm:
+                try:
+                    response = fb.llm.invoke(prompt)
+                    parsed = _parse_bool_list(getattr(response, "content", ""), expected_len=len(chunks))
+                    if parsed is not None:
+                        return parsed
+                except Exception:
+                    pass
 
     return _heuristic_relevance(query, chunks)
 
@@ -316,10 +373,11 @@ def unified_deep_evaluation(
     answer: str,
     retrieved_chunks: List[Any],
     candidate_chunks: List[Any],
-    llm_client: Any,
+    llm_client: Any = None,
 ) -> Dict[str, Any]:
-    if llm_client is None or getattr(llm_client, "llm", None) is None:
-        raise ValueError("LLM client is not available for unified evaluation.")
+    evaluator = _get_evaluator_llm(llm_client)
+    if not evaluator:
+        raise ValueError("No evaluator LLM is available for unified evaluation.")
 
     # Format the retrieved chunks
     retrieved_texts = [
@@ -353,11 +411,25 @@ def unified_deep_evaluation(
         "}\n"
     )
 
-    response = llm_client.llm.invoke(prompt)
-    # Use _extract_text_content to safely handle list/dict/str content
-    # (Gemini thinking-mode returns a list of blocks; str() on a list gives a Python repr, not JSON)
-    raw_content = getattr(response, "content", "")
-    content = _extract_text_content(raw_content).strip()
+    content = ""
+    try:
+        response = evaluator.invoke(prompt)
+        raw_content = getattr(response, "content", "")
+        content = _extract_text_content(raw_content).strip()
+    except Exception as exc:
+        logger.warning("Primary evaluator failed in unified_deep_evaluation (%s); attempting fallback", exc)
+        if hasattr(llm_client, "fallback_client") and llm_client.fallback_client:
+            fb = llm_client.fallback_client
+            if hasattr(fb, "llm") and fb.llm is not None and fb.llm != evaluator:
+                try:
+                    response = fb.llm.invoke(prompt)
+                    raw_content = getattr(response, "content", "")
+                    content = _extract_text_content(raw_content).strip()
+                except Exception as fe:
+                    logger.error("Evaluator fallback failed: %s", fe)
+
+    if not content:
+        raise RuntimeError("Evaluator failed to return content for unified deep evaluation.")
     logger.debug("unified_deep_evaluation raw content: %r", content[:500])
 
     # Parse JSON output

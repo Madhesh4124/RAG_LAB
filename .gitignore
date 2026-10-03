@@ -21,3 +21,6 @@ backend/chroma_data/
 backend/chroma_db/
 backend/chroma_store/
 uploads/
+.opencode
+.ua/
+.uv-cache/

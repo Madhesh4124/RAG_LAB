@@ -1,8 +1,8 @@
-import React from 'react';
-import { useState } from "react";
+import React, { useState } from 'react';
 import { useLocation, useNavigate } from "react-router-dom";
-
 import { useAuth } from "../hooks/useAuth";
+import { Button, InlineAlert } from "../components/common/index";
+import { IconArrowRight } from "../components/common/Icons";
 
 export default function Login() {
   const navigate = useNavigate();
@@ -44,101 +44,145 @@ export default function Login() {
     setError("");
   };
 
+  const inputClass =
+    "w-full rounded-lg bg-zinc-900 border border-zinc-800 px-3.5 py-2 text-xs text-zinc-100 " +
+    "placeholder-zinc-500 outline-none " +
+    "focus:border-amber-500/80 focus:ring-1 focus:ring-amber-500/40 transition-colors";
+
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-      <div className="w-full max-w-md bg-white border border-gray-200 rounded-2xl shadow-sm p-6 space-y-5">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">RAG Lab</h1>
-          <p className="text-sm text-gray-500 mt-1">Sign in to continue</p>
-          <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50 p-3">
-            <p className="text-xs text-blue-800">Test account: username sample | password sample</p>
+    <div className="min-h-[calc(100vh-3.5rem)] flex items-center justify-center px-4 py-12 bg-zinc-950">
+      <div className="w-full max-w-sm">
+        {/* Brand header */}
+        <div className="text-center mb-6">
+          <div className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-zinc-900 border border-zinc-800 mb-3">
+            <span className="font-mono text-sm font-bold text-amber-500">R</span>
+          </div>
+          <h1 className="text-xl font-semibold tracking-tight text-zinc-100">
+            {mode === "signup" ? "Create an account" : "Sign in to RAG Lab"}
+          </h1>
+          <p className="mt-1 text-xs text-zinc-500">
+            {mode === "signup"
+              ? "Set up your workspace to index and evaluate documents."
+              : "Enter your credentials to access the laboratory."}
+          </p>
+        </div>
+
+        {/* Card */}
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-6 shadow-sm">
+          {/* Quick demo credentials banner */}
+          <div className="mb-5 rounded-lg border border-zinc-800/80 bg-zinc-950/60 p-3 flex items-center justify-between text-xs">
+            <div className="font-mono text-[11px] text-zinc-400">
+              <span className="text-zinc-500">Demo:</span> sample / sample
+            </div>
             <button
               type="button"
               onClick={useSampleAccount}
-              className="mt-2 text-xs font-medium text-blue-700 hover:text-blue-800 hover:underline"
+              className="text-[11px] font-medium text-amber-400 hover:text-amber-300 transition-colors cursor-pointer"
             >
-              Use sample account
+              Fill demo
             </button>
           </div>
-        </div>
 
-        <div className="grid grid-cols-2 gap-2 bg-gray-100 p-1 rounded-xl">
-          <button
-            type="button"
-            className={`rounded-lg py-2 text-sm font-medium ${mode === "login" ? "bg-white text-gray-900" : "text-gray-500"}`}
-            onClick={() => setMode("login")}
-          >
-            Login
-          </button>
-          <button
-            type="button"
-            className={`rounded-lg py-2 text-sm font-medium ${mode === "signup" ? "bg-white text-gray-900" : "text-gray-500"}`}
-            onClick={() => setMode("signup")}
-          >
-            Signup
-          </button>
-        </div>
+          {/* Mode Switcher Tabs */}
+          <div className="grid grid-cols-2 gap-1 rounded-lg bg-zinc-950 p-1 mb-5 border border-zinc-800/60">
+            <button
+              type="button"
+              onClick={() => { setMode("login"); setError(""); }}
+              className={`py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer ${
+                mode === "login" ? "bg-zinc-800 text-zinc-100 font-semibold" : "text-zinc-400 hover:text-zinc-200"
+              }`}
+            >
+              Sign In
+            </button>
+            <button
+              type="button"
+              onClick={() => { setMode("signup"); setError(""); }}
+              className={`py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer ${
+                mode === "signup" ? "bg-zinc-800 text-zinc-100 font-semibold" : "text-zinc-400 hover:text-zinc-200"
+              }`}
+            >
+              Sign Up
+            </button>
+          </div>
 
-        <form className="space-y-3" onSubmit={submit}>
-          {mode === "signup" ? (
-            <>
+          {/* Form */}
+          <form className="space-y-3.5" onSubmit={submit}>
+            {mode === "signup" ? (
+              <>
+                <div>
+                  <label className="block text-[11px] font-medium text-zinc-400 mb-1.5">Username</label>
+                  <input
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    className={inputClass}
+                    placeholder="Enter username"
+                    required
+                    autoComplete="username"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-medium text-zinc-400 mb-1.5">Email address</label>
+                  <input
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className={inputClass}
+                    placeholder="name@example.com"
+                    type="email"
+                    required
+                    autoComplete="email"
+                  />
+                </div>
+              </>
+            ) : (
+              <div>
+                <label className="block text-[11px] font-medium text-zinc-400 mb-1.5">Username or email</label>
+                <input
+                  value={identifier}
+                  onChange={(e) => setIdentifier(e.target.value)}
+                  className={inputClass}
+                  placeholder="username or email"
+                  required
+                  autoComplete="username"
+                />
+              </div>
+            )}
+
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-[11px] font-medium text-zinc-400">Password</label>
+                {mode === "login" && (
+                  <button
+                    type="button"
+                    onClick={() => navigate("/password-reset")}
+                    className="text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors cursor-pointer"
+                  >
+                    Forgot password?
+                  </button>
+                )}
+              </div>
               <input
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                placeholder="Username"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className={inputClass}
+                placeholder="••••••••"
+                type="password"
                 required
+                autoComplete={mode === "signup" ? "new-password" : "current-password"}
               />
-              <input
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                placeholder="Email"
-                type="email"
-                required
-              />
-            </>
-          ) : (
-            <input
-              value={identifier}
-              onChange={(e) => setIdentifier(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-              placeholder="Username or email"
-              required
-            />
-          )}
-
-          <input
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-            placeholder="Password"
-            type="password"
-            required
-          />
-
-          {mode === "login" && (
-            <div className="text-right">
-              <button
-                type="button"
-                onClick={() => navigate('/password-reset')}
-                className="text-xs text-blue-600 hover:underline"
-              >
-                Forgot password?
-              </button>
             </div>
-          )}
 
-          {error && <p className="text-sm text-red-600">{error}</p>}
+            {error && <InlineAlert type="error">{error}</InlineAlert>}
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full rounded-lg bg-blue-600 text-white py-2 text-sm font-medium hover:bg-blue-700 disabled:opacity-60"
-          >
-            {loading ? "Please wait..." : mode === "signup" ? "Create Account" : "Sign In"}
-          </button>
-        </form>
+            <Button
+              type="submit"
+              disabled={loading}
+              className="w-full mt-2"
+              trailingIcon={!loading ? <IconArrowRight size={13} /> : null}
+            >
+              {loading ? "Authenticating…" : mode === "signup" ? "Create Account" : "Sign In"}
+            </Button>
+          </form>
+        </div>
       </div>
     </div>
   );

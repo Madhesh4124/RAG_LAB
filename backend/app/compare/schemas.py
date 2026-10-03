@@ -28,7 +28,7 @@ class RAGConfig(BaseModel):
         self.chunk_strategy = strategy_alias.get(self.chunk_strategy, self.chunk_strategy)
 
         default_model_by_provider = {
-            "nvidia": "nvidia/nv-embed-v1",
+            "nvidia": "nvidia/nemotron-3-embed-1b",
             "huggingface": "sentence-transformers/all-MiniLM-L6-v2",
             "google": "models/gemini-embedding-2-preview",
         }
@@ -54,6 +54,7 @@ class RAGConfig(BaseModel):
 
 class IndexRequest(BaseModel):
     document_id: Optional[uuid.UUID] = None
+    document_ids: Optional[List[uuid.UUID]] = None
     config: RAGConfig
 
 
@@ -73,6 +74,7 @@ class ConfigResult(BaseModel):
     avg_similarity: float
     chunk_count: int
     evaluation: Optional[Dict[str, Any]] = None
+    chunk_details: Optional[List[Dict[str, Any]]] = None
 
 
 class CompareRequest(BaseModel):

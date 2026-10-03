@@ -28,7 +28,7 @@ function createPresetConfigs() {
       chunk_strategy: "fixed_size",
       chunk_params: { chunk_size: 512, overlap: 50 },
       embedding_provider: "nvidia",
-      embedding_model: "nvidia/nv-embed-v1",
+      embedding_model: "nvidia/nemotron-3-embed-1b",
       top_k: 8,
       threshold: 0.3,
     },
@@ -60,14 +60,23 @@ function createPresetConfigs() {
 }
 
 export default function ComparePage() {
-  const { docId: activeDocId, filename: activeDataset, setDocId, setFilename } = useSession();
+  const {
+    docId: activeDocId,
+    docIds,
+    filename: activeDataset,
+    setDocId,
+    setDocIds,
+    setFilename,
+    stagedConfigs,
+    setStagedConfigs,
+    isQueryUnlocked,
+    setIsQueryUnlocked,
+  } = useSession();
   const [availableConfigs, setAvailableConfigs] = useState(createPresetConfigs);
-  const [stagedConfigs, setStagedConfigs] = useState([]);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isRunningStaged, setIsRunningStaged] = useState(false);
-  const [isQueryUnlocked, setIsQueryUnlocked] = useState(false);
   const [showConfigModal, setShowConfigModal] = useState(false);
   const [toast, setToast] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -95,15 +104,18 @@ export default function ComparePage() {
     resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [results]);
 
+  // Only reset staged configs if the dataset actually changes to a DIFFERENT file
   useEffect(() => {
-    activeDatasetRef.current = activeDataset;
-    setAvailableConfigs(createPresetConfigs());
-    setStagedConfigs([]);
-    setResults(null);
-    setQuery("");
-    setIsQueryUnlocked(false);
-    setShowConfigModal(false);
-  }, [activeDataset]);
+    if (activeDatasetRef.current !== activeDataset) {
+      activeDatasetRef.current = activeDataset;
+      setAvailableConfigs(createPresetConfigs());
+      setStagedConfigs([]);
+      setResults(null);
+      setQuery("");
+      setIsQueryUnlocked(false);
+      setShowConfigModal(false);
+    }
+  }, [activeDataset, setStagedConfigs, setIsQueryUnlocked]);
 
   useEffect(() => {
     if (!toast) return;
@@ -123,8 +135,10 @@ export default function ComparePage() {
     const datasetSnapshot = activeDatasetRef.current;
     updateConfigByName(config.name, { indexingStatus: "indexing" });
     try {
+      const effectiveDocIds = docIds && docIds.length > 0 ? docIds : (activeDocId ? [activeDocId] : []);
       const { data } = await compareIndex({
         document_id: activeDocId,
+        document_ids: effectiveDocIds,
         config: {
           name: config.name,
           chunk_strategy: config.chunk_strategy,
@@ -211,6 +225,8 @@ export default function ComparePage() {
     setUploadProgress(0);
     try {
       let lastUploaded = null;
+      const uploadedIds = [];
+      const uploadedNames = [];
       for (let index = 0; index < nextFiles.length; index += 1) {
         const file = nextFiles[index];
         const formData = new FormData();
@@ -221,10 +237,19 @@ export default function ComparePage() {
           setUploadProgress(Math.round(overall));
         });
         lastUploaded = data;
+        if (data?.id) {
+          uploadedIds.push(String(data.id));
+          uploadedNames.push(data.filename || file.name);
+        }
       }
       if (lastUploaded) {
         setDocId(lastUploaded?.id || null);
-        setFilename(lastUploaded?.filename || nextFiles[nextFiles.length - 1].name);
+        if (uploadedIds.length > 0) {
+          setDocIds(uploadedIds);
+          setFilename(uploadedNames.join(", "));
+        } else {
+          setFilename(lastUploaded?.filename || nextFiles[nextFiles.length - 1].name);
+        }
       }
       showToast(`Uploaded ${nextFiles.length} file(s).`);
       setShowUploadModal(false);
@@ -328,15 +353,15 @@ export default function ComparePage() {
   };
 
   return (
-    <div className="mx-auto max-w-7xl space-y-6 px-4 py-8">
+    <div className="mx-auto max-w-7xl space-y-5 px-4 sm:px-6 py-6">
       {toast && (
         <div
-          className={`fixed right-4 top-4 z-50 rounded-xl border px-4 py-3 text-sm shadow-lg backdrop-blur ${
+          className={`fixed right-4 top-4 z-50 rounded-lg border px-4 py-2.5 text-xs font-mono font-medium shadow-md ${
             toast.type === "error"
-              ? "border-red-200 bg-red-50 text-red-700"
+              ? "border-red-500/30 bg-zinc-950 text-red-400"
               : toast.type === "warning"
-                ? "border-amber-200 bg-amber-50 text-amber-800"
-                : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                ? "border-amber-500/30 bg-zinc-950 text-amber-300"
+                : "border-emerald-500/30 bg-zinc-950 text-emerald-400"
           }`}
         >
           {toast.message}
@@ -345,35 +370,39 @@ export default function ComparePage() {
 
       <DatasetBanner activeDataset={activeDataset} isDisabled={isDatasetMissing} />
 
-      <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm md:p-5">
+      {/* Dataset & Document Selection Card */}
+      <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="text-lg font-semibold text-gray-900">Upload Document</h2>
-            <p className="text-sm text-gray-500">Upload a file or load an existing document before indexing staged configs.</p>
+            <h2 className="text-sm font-semibold text-zinc-100">Dataset Document Selection</h2>
+            <p className="text-xs text-zinc-400 mt-0.5">Upload a new document or load an existing file to evaluate pipelines.</p>
           </div>
-          <Button
-            onClick={() => setShowUploadModal(true)}
-            disabled={isUploading || isLoading}
-            variant="secondary"
-          >
-            {isUploading ? `Uploading... ${uploadProgress}%` : "Upload Documents"}
+          <Button onClick={() => setShowUploadModal(true)} disabled={isUploading || isLoading} variant="secondary" size="sm">
+            {isUploading ? `Uploading… ${uploadProgress}%` : "Upload Document"}
           </Button>
         </div>
-        {isUploading && <p className="text-sm text-blue-700">Uploading... {uploadProgress}%</p>}
-
-        <div className="mt-4">
+        <div>
           <DocumentPicker
-            value={activeDocId || ""}
-            onSelect={(doc) => {
-              setDocId(doc?.id || null);
-              setFilename(doc?.filename || null);
-              showToast(doc ? `Loaded "${doc.filename}".` : "Cleared document selection.", doc ? "success" : "warning");
+            values={docIds && docIds.length > 0 ? docIds : (activeDocId ? [String(activeDocId)] : [])}
+            multiSelect
+            onSelectMany={(docs) => {
+              const ids = (docs || []).map((doc) => String(doc.id));
+              setDocIds(ids);
+              setDocId(ids[0] || null);
+              const names = (docs || []).map((doc) => doc.filename).join(", ");
+              setFilename(names || null);
+              showToast(
+                docs?.length
+                  ? `Selected ${docs.length} document(s) for comparison.`
+                  : "Cleared document selection.",
+                docs?.length ? "success" : "warning"
+              );
             }}
             disabled={isUploading || isLoading || isRunningStaged}
-            label="Load Previously Uploaded Document"
+            label="Select Document(s) for Comparison"
           />
         </div>
-      </section>
+      </div>
 
       <UploadDocumentsModal
         open={showUploadModal}
@@ -385,21 +414,23 @@ export default function ComparePage() {
         title="Upload documents for Compare"
       />
 
-      <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm md:p-5">
+      {/* Pipeline Library Grid */}
+      <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="text-lg font-semibold text-gray-900">Compare Configurations</h2>
-            <p className="text-sm text-gray-500">Presets and custom configs are indexed into dedicated collections before comparison.</p>
+            <h2 className="text-sm font-semibold text-zinc-100">Pipeline Configuration Library</h2>
+            <p className="text-xs text-zinc-400 mt-0.5">Presets and custom parameter sets indexed into isolated vector collections.</p>
           </div>
-          <Button onClick={() => setShowConfigModal(true)} disabled={isDatasetMissing || isLoading} variant="secondary">
-            + Create Config
-          </Button>
-          <Button onClick={handleClearChromaDb} disabled={isLoading || isUploading} variant="danger">
-            Clear Entire ChromaDB
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={() => setShowConfigModal(true)} disabled={isDatasetMissing || isLoading} variant="secondary" size="sm">
+              + Custom Config
+            </Button>
+            <Button onClick={handleClearChromaDb} disabled={isLoading || isUploading} variant="danger" size="sm">
+              Clear ChromaDB
+            </Button>
+          </div>
         </div>
-
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        <div className="grid gap-3.5 sm:grid-cols-2 xl:grid-cols-3">
           {availableConfigs.map((config) => (
             <ConfigCard
               key={config.name}
@@ -410,7 +441,7 @@ export default function ComparePage() {
             />
           ))}
         </div>
-      </section>
+      </div>
 
       <StagingPanel
         stagedConfigs={stagedConfigsLive}
@@ -446,4 +477,6 @@ export default function ComparePage() {
       )}
     </div>
   );
+
 }
+

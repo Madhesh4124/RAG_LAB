@@ -19,13 +19,19 @@ from app.models.user import User
 router = APIRouter(prefix="/compare", tags=["compare"])
 
 
-async def _get_active_document_text(db: AsyncSession, current_user: User, document_id=None) -> str:
+import logging
+from app.utils.file_processor import FileProcessor
+
+logger = logging.getLogger(__name__)
+
+
+async def _get_active_document(db: AsyncSession, current_user: User, document_id=None) -> Document:
     if document_id is not None:
         selected_stmt = select(Document).where(Document.id == document_id, Document.user_id == current_user.id)
         selected_document = (await db.execute(selected_stmt)).scalars().first()
         if not selected_document or not selected_document.content:
             raise HTTPException(status_code=404, detail="Selected document not found")
-        return selected_document.content
+        return selected_document
 
     stmt = (
         select(Document)
@@ -34,12 +40,36 @@ async def _get_active_document_text(db: AsyncSession, current_user: User, docume
     )
     document = (await db.execute(stmt)).scalars().first()
     if document and document.content:
-        return document.content
+        return document
 
     raise HTTPException(
         status_code=400,
         detail="No active document found. Upload a document first.",
     )
+
+
+def _extract_document_data(doc: Document) -> tuple[str, list[dict], dict]:
+    metadata = {"filename": doc.filename, "file_type": doc.file_type}
+    is_pdf = (
+        (doc.file_type and doc.file_type.lower() == "pdf")
+        or (doc.filename and doc.filename.lower().endswith(".pdf"))
+        or str(doc.content or "").startswith("pdf://")
+    )
+    if is_pdf:
+        pages: list[dict] = []
+        try:
+            pages = FileProcessor.extract_pdf_pages(doc.content, doc.filename)
+            text_parts = [p.get("text", "") for p in pages if p.get("text")]
+            full_text = "\n\n".join(text_parts).strip()
+            if full_text:
+                return full_text, pages, metadata
+        except Exception as exc:
+            logger.warning("Compare: PDF page extraction failed for '%s': %s", doc.filename, exc)
+
+        fallback = FileProcessor.extract_pdf_text_fallback(doc.content, doc.filename)
+        return fallback, pages, metadata
+
+    return str(doc.content or ""), [], metadata
 
 
 @router.post("/index", response_model=IndexResponse)
@@ -48,8 +78,36 @@ async def compare_index(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> IndexResponse:
-    document_text = await _get_active_document_text(db, current_user, document_id=request.document_id)
-    return await index_config(request.config, document_text, user_scope=str(current_user.id))
+    if request.document_ids and len(request.document_ids) > 0:
+        docs_stmt = (
+            select(Document)
+            .where(Document.id.in_(request.document_ids), Document.user_id == current_user.id)
+        )
+        docs = (await db.execute(docs_stmt)).scalars().all()
+        if not docs:
+            raise HTTPException(status_code=404, detail="Selected documents not found")
+        all_texts = []
+        all_pages = []
+        for d in docs:
+            t, p, _ = _extract_document_data(d)
+            if t:
+                all_texts.append(f"--- Document: {d.filename} ---\n" + t)
+            if p:
+                all_pages.extend(p)
+        doc_text = "\n\n".join(all_texts).strip()
+        doc_pages = all_pages
+        doc_meta = {"filenames": [d.filename for d in docs]}
+    else:
+        doc = await _get_active_document(db, current_user, document_id=request.document_id)
+        doc_text, doc_pages, doc_meta = _extract_document_data(doc)
+
+    return await index_config(
+        request.config,
+        doc_text,
+        user_scope=str(current_user.id),
+        document_pages=doc_pages,
+        doc_metadata=doc_meta,
+    )
 
 
 @router.post("/run", response_model=CompareResponse)

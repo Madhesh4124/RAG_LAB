@@ -3,7 +3,7 @@ import os
 import threading
 import time
 import uuid
-from typing import List, Tuple
+from typing import Any, List, Tuple
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 
@@ -18,22 +18,45 @@ from app.compare.summary_store import get_summary as get_compare_summary, upsert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
-_LLM_CACHE: dict[tuple[str, str], ChatGoogleGenerativeAI] = {}
+_LLM_CACHE: dict[tuple, Any] = {}
 _LLM_CACHE_LOCK = threading.Lock()
 
 
-def _get_cached_compare_llm(model: str, api_key: str) -> ChatGoogleGenerativeAI:
-    cache_key = (model, api_key)
+def _get_cached_compare_llm(model: str = "openai/gpt-oss-120b", api_key: str | None = None) -> Any:
+    groq_api_key = os.getenv("GROQ_API_KEY")
+    if groq_api_key:
+        cache_key = ("groq", "openai/gpt-oss-120b", groq_api_key)
+        with _LLM_CACHE_LOCK:
+            cached = _LLM_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+        from langchain_groq import ChatGroq
+        llm = ChatGroq(
+            model="openai/gpt-oss-120b",
+            temperature=0,
+            api_key=groq_api_key,
+            max_tokens=2048,
+            max_retries=1,
+        )
+        with _LLM_CACHE_LOCK:
+            _LLM_CACHE.setdefault(cache_key, llm)
+            return _LLM_CACHE[cache_key]
+
+    gemini_key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if not gemini_key:
+        raise ValueError("Neither GROQ_API_KEY nor GEMINI_API_KEY/GOOGLE_API_KEY is set.")
+
+    cache_key = ("gemini", "gemini-2.5-flash", gemini_key)
     with _LLM_CACHE_LOCK:
         cached = _LLM_CACHE.get(cache_key)
     if cached is not None:
         return cached
 
-    actual_model = "gemini-2.5-flash" if model in ("gemma-4-27b-it", "gemma-4-26b-a4b-it") else model
     llm = ChatGoogleGenerativeAI(
-        model=actual_model,
+        model="gemini-2.5-flash",
         temperature=0,
-        google_api_key=api_key,
+        google_api_key=gemini_key,
+        max_retries=1,
     )
     with _LLM_CACHE_LOCK:
         _LLM_CACHE.setdefault(cache_key, llm)
@@ -128,11 +151,7 @@ async def run_single_config(
         user_scope=user_scope,
     )
 
-    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-    if not api_key:
-        raise ValueError("GEMINI_API_KEY/GOOGLE_API_KEY is not set.")
-
-    llm = _get_cached_compare_llm(model="gemma-4-27b-it", api_key=api_key)
+    llm = _get_cached_compare_llm()
 
     if query_mode == "global":
         summary, fallback_results, fallback_chunks = await _summarize_compare_context(
@@ -150,6 +169,71 @@ async def run_single_config(
         end = time.perf_counter()
         latency_ms = (end - start) * 1000.0
 
+        chunk_details = [
+            {
+                "index": idx + 1,
+                "text": _extract_text(doc),
+                "score": scores[idx] if idx < len(scores) else 0.0,
+                "page_number": getattr(doc, "metadata", {}).get("page_number")
+                or getattr(doc, "metadata", {}).get("page")
+                or None,
+                "filename": getattr(doc, "metadata", {}).get("filename", None),
+                "chunk_strategy": getattr(doc, "metadata", {}).get("chunk_strategy", config.chunk_strategy),
+            }
+            for idx, (doc, _) in enumerate(fallback_results)
+        ]
+
+        retrieved_items = [
+            {"text": chunk_text, "score": scores[idx] if idx < len(scores) else 0.0}
+            for idx, chunk_text in enumerate(chunks)
+        ]
+        candidate_items = [
+            {"text": _extract_text(doc), "score": float(score)}
+            for doc, score in fallback_results
+        ]
+
+        global_eval = None
+        try:
+            from app.services.evaluation.retrieval_metrics import unified_deep_evaluation, _get_evaluator_llm
+            eval_llm = _get_evaluator_llm(_LLMWrapper(llm))
+            unified_res = None
+            if eval_llm and chunks:
+                try:
+                    unified_res = await asyncio.to_thread(
+                        unified_deep_evaluation,
+                        query=query,
+                        answer=answer,
+                        retrieved_chunks=retrieved_items,
+                        candidate_chunks=candidate_items,
+                        llm_client=_LLMWrapper(eval_llm),
+                    )
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).warning("Compare global unified evaluation skipped: %s", e)
+
+            global_eval = build_retrieval_metrics_report(
+                query=query,
+                answer=answer,
+                retrieved_chunks=retrieved_items,
+                candidate_chunks=candidate_items,
+                llm_client=_LLMWrapper(eval_llm or llm),
+                retrieval_config={
+                    "type": "compare",
+                    "top_k": config.top_k,
+                    "similarity_threshold": config.threshold,
+                },
+                query_mode="global",
+                precomputed_retrieved_flags=unified_res.get("retrieved_flags") if unified_res else None,
+                precomputed_candidate_flags=unified_res.get("candidate_flags") if unified_res else None,
+            )
+            if unified_res:
+                for key in ("faithfulness", "answer_relevancy", "context_recall"):
+                    if unified_res.get(key) is not None:
+                        global_eval.setdefault("answer_metrics", {})[key] = unified_res[key]
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).error("Failed building global compare evaluation: %s", exc)
+
         return ConfigResult(
             config=config,
             answer=answer,
@@ -158,25 +242,8 @@ async def run_single_config(
             latency_ms=round(latency_ms, 3),
             avg_similarity=calc_avg_similarity(scores),
             chunk_count=len(chunks),
-            evaluation=build_retrieval_metrics_report(
-                query=query,
-                answer=answer,
-                retrieved_chunks=[
-                    {"text": chunk_text, "score": scores[idx] if idx < len(scores) else 0.0}
-                    for idx, chunk_text in enumerate(chunks)
-                ],
-                candidate_chunks=[
-                    {"text": _extract_text(doc), "score": float(score)}
-                    for doc, score in fallback_results
-                ],
-                llm_client=_LLMWrapper(llm),
-                retrieval_config={
-                    "type": "compare",
-                    "top_k": config.top_k,
-                    "similarity_threshold": config.threshold,
-                },
-                query_mode="global",
-            ),
+            evaluation=global_eval,
+            chunk_details=chunk_details,
         )
 
     raw_results = await asyncio.to_thread(
@@ -215,6 +282,71 @@ async def run_single_config(
     end = time.perf_counter()
     latency_ms = (end - start) * 1000.0
 
+    chunk_details = [
+        {
+            "index": idx + 1,
+            "text": _extract_text(doc),
+            "score": scores[idx] if idx < len(scores) else 0.0,
+            "page_number": getattr(doc, "metadata", {}).get("page_number")
+            or getattr(doc, "metadata", {}).get("page")
+            or None,
+            "filename": getattr(doc, "metadata", {}).get("filename", None),
+            "chunk_strategy": getattr(doc, "metadata", {}).get("chunk_strategy", config.chunk_strategy),
+        }
+        for idx, (doc, _) in enumerate(filtered_results)
+    ]
+
+    retrieved_items = [
+        {"text": chunk_text, "score": scores[idx] if idx < len(scores) else 0.0}
+        for idx, chunk_text in enumerate(chunks)
+    ]
+    candidate_items = [
+        {"text": _extract_text(doc), "score": float(score)}
+        for doc, score in normalized_results
+    ]
+
+    evaluation = None
+    try:
+        from app.services.evaluation.retrieval_metrics import unified_deep_evaluation, _get_evaluator_llm
+        eval_llm = _get_evaluator_llm(_LLMWrapper(llm))
+        unified_res = None
+        if eval_llm and chunks:
+            try:
+                unified_res = await asyncio.to_thread(
+                    unified_deep_evaluation,
+                    query=query,
+                    answer=answer,
+                    retrieved_chunks=retrieved_items,
+                    candidate_chunks=candidate_items,
+                    llm_client=_LLMWrapper(eval_llm),
+                )
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning("Compare unified evaluation skipped: %s", e)
+
+        evaluation = build_retrieval_metrics_report(
+            query=query,
+            answer=answer,
+            retrieved_chunks=retrieved_items,
+            candidate_chunks=candidate_items,
+            llm_client=_LLMWrapper(eval_llm or llm),
+            retrieval_config={
+                "type": "compare",
+                "top_k": config.top_k,
+                "similarity_threshold": config.threshold,
+            },
+            query_mode="local",
+            precomputed_retrieved_flags=unified_res.get("retrieved_flags") if unified_res else None,
+            precomputed_candidate_flags=unified_res.get("candidate_flags") if unified_res else None,
+        )
+        if unified_res:
+            for key in ("faithfulness", "answer_relevancy", "context_recall"):
+                if unified_res.get(key) is not None:
+                    evaluation.setdefault("answer_metrics", {})[key] = unified_res[key]
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).error("Failed building compare evaluation: %s", exc)
+
     return ConfigResult(
         config=config,
         answer=answer,
@@ -223,25 +355,8 @@ async def run_single_config(
         latency_ms=round(latency_ms, 3),
         avg_similarity=calc_avg_similarity(scores),
         chunk_count=len(chunks),
-        evaluation=build_retrieval_metrics_report(
-            query=query,
-            answer=answer,
-            retrieved_chunks=[
-                {"text": chunk_text, "score": scores[idx] if idx < len(scores) else 0.0}
-                for idx, chunk_text in enumerate(chunks)
-            ],
-            candidate_chunks=[
-                {"text": _extract_text(doc), "score": float(score)}
-                for doc, score in normalized_results
-            ],
-            llm_client=_LLMWrapper(llm),
-            retrieval_config={
-                "type": "compare",
-                "top_k": config.top_k,
-                "similarity_threshold": config.threshold,
-            },
-            query_mode="local",
-        ),
+        evaluation=evaluation,
+        chunk_details=chunk_details,
     )
 
 

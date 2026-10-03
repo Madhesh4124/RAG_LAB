@@ -1,263 +1,249 @@
 ---
 title: RAG Lab
 emoji: 🔬
-colorFrom: blue
-colorTo: indigo
+colorFrom: amber
+colorTo: orange
 sdk: docker
 sdk_version: latest
+app_port: 7860
 pinned: false
 ---
 
-# RAG Lab
+# 🔬 RAG Lab
 
-RAG Lab is a full-stack playground for building, tuning, and comparing Retrieval-Augmented Generation (RAG) pipelines on your own documents.
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg?logo=python&logoColor=white)](https://python.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.135%2B-009688.svg?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
+[![React](https://img.shields.io/badge/React-19.2%2B-61DAFB.svg?logo=react&logoColor=black)](https://react.dev)
+[![Vite](https://img.shields.io/badge/Vite-8.0%2B-646CFF.svg?logo=vite&logoColor=white)](https://vitejs.dev)
+[![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-3.4%2B-38B2AC.svg?logo=tailwind-css&logoColor=white)](https://tailwindcss.com)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-It includes:
-- A FastAPI backend for document processing, indexing, chat, evaluation, and metrics.
-- A React + Vite frontend with a guided setup wizard, chunk preview, compare mode, and chat UI.
+**RAG Lab** is a full-stack, multi-tenant engineering platform for building, tuning, evaluating, and benchmarking **Retrieval-Augmented Generation (RAG)** pipelines across real-world documents.
 
-## What Is Implemented Today
+Unlike toy RAG implementations, RAG Lab provides a full experimentation suite: hybrid search (BM25 sparse + dense vector embeddings), async background indexing, side-by-side pipeline comparison, automated best-preset tuning, evaluation metrics (Faithfulness & Answer Relevancy), and multi-tenant session authentication.
 
-### Core workflow
-1. Upload a document (`.pdf` or `.txt`).
-2. Configure a pipeline in a step-by-step wizard.
-3. Save config and preview generated chunks.
-4. Chat with streaming responses.
-5. Compare multiple retrieval/indexing configs side-by-side.
-6. Score/evaluate responses and inspect performance metrics.
+---
 
-### Setup wizard
-- 5-step flow: Upload, Chunking, Embedding, Retrieval, LLM & Memory.
-- Presets: `fast`, `balanced`, `accurate`, `recursive`, `chapter`, `sentence_window`.
-- Chunking strategies in UI:
-  - `fixed_size`
-  - `recursive`
-  - `semantic`
-  - `chapter_based`
-  - `regex`
-  - `sentence_window`
-- Embedding providers in UI:
-  - NVIDIA
-  - Hugging Face
-- Retrieval modes:
-  - `dense`
-  - `sparse`
-  - `hybrid`
-  - `mmr`
-- Reranker toggle and model selection (Hugging Face API reranker).
-- LLM selection uses Groq by default (`llama-3.3-70b-versatile`).
-- Memory modes:
-  - `none`
-  - `buffer`
-  - `summary`
+## 📸 Overview & Operational Modes
 
-### Chunk preview
-- Visualizes chunks for a selected document + saved config.
-- Shows chunk order, ranges, and overlap metadata.
+RAG Lab features three distinct operational workspaces accessible from the **Mode Selection** dashboard:
 
-### Chat
-- Streaming chat endpoint (`/api/chat/stream`) with status, metadata, token stream, done events.
-- Stores user/assistant messages.
-- Stores timing/quality metrics per assistant message.
-- System reset endpoint to clear cache/history/vector storage.
-
-### Evaluation Metrics
-RAG Lab provides a comprehensive suite of metrics for both retrieval quality and LLM answer generation quality, including both fast statistical metrics and deep LLM-as-a-judge evaluations.
-
-**Retrieval Metrics (Statistical)**
-- **Precision@K**: The proportion of retrieved chunks in the top K that are actually relevant.
-- **Recall@K**: The proportion of all relevant chunks that were successfully retrieved.
-- **Hit Rate@K**: 1.0 if at least one relevant chunk was retrieved in the top K, 0.0 otherwise.
-- **Reciprocal Rank (MRR)**: The reciprocal of the rank of the first relevant chunk (1/rank).
-- **Average Precision**: The average of precision scores at each rank where a relevant chunk is found.
-- **nDCG@K (Normalized Discounted Cumulative Gain)**: Measures ranking quality, penalizing relevant chunks that appear lower in the results.
-- **Avg Similarity**: The mean similarity score of the retrieved chunks returned by the embedder.
-- **Diversity**: A measure of how distinct the retrieved chunks are from one another. Higher means less redundant chunks.
-- **MMR Lambda**: The lambda parameter used during Maximal Marginal Relevance retrieval, balancing relevance vs. diversity.
-
-**Answer Quality Metrics (LLM-as-a-judge)**
-- **Faithfulness**: Measures how factually accurate the generated answer is based strictly on the retrieved context (identifies hallucinations).
-- **Answer Relevancy**: Measures how well the generated answer addresses the user's original query, penalizing redundant or incomplete answers.
-- **Context Precision**: Evaluates whether the most relevant chunks were ranked at the very top of the retrieved context.
-- **Context Recall**: Evaluates whether the retrieved context contained all the necessary information required to answer the query.
-
-### Compare mode
-- Uses dedicated compare module endpoints (`/compare/index`, `/compare/run`, `/compare/clear-chromadb`).
-- Supports staging up to 4 configs.
-- Supports all compare chunking strategies and chunk hyperparameters.
-- Supports embedding provider/model selection in compare config modal (NVIDIA + Hugging Face model sets).
-- Per-config indexing status in cards and staging panel.
-- Staging panel shows a filling progress bar while a config is indexing.
-
-## Project Structure
-
-```text
-RAG_LAB/
-  backend/
-    app/
-      api/                # /api routes (documents, chat, config, analysis, evaluation, metrics, legacy compare)
-      compare/            # dedicated compare module routes/services (/compare/*)
-      services/           # chunking, embedding, retrieval, memory, llm, pipeline
-      models/             # SQLAlchemy models
-      utils/              # file processing, serialization, timing
-      main.py
-    requirements.txt
-  frontend/
-    src/
-      pages/              # Setup, Preview, Compare, Chat
-      components/         # config wizard, compare UI, chat UI, preview UI
-      hooks/
-      services/api.js
-    package.json
-  README.md
+```
+                                 ┌───────────────────────────────────┐
+                                 │       Select Workspace Mode       │
+                                 └─────────────────┬─────────────────┘
+                                                   │
+         ┌─────────────────────────────────────────┼────────────────────────────────────────┐
+         ▼                                         ▼                                        ▼
+┌───────────────────────────────┐ ┌───────────────────────────────┐ ┌───────────────────────────────┐
+│     ⚡ Quick Chat             │ │    🛠️ Custom Pipeline          │ │     ⚖️ Comparison Lab         │
+│ Instant QA with automated     │ │ 5-step granular wizard:       │ │ Benchmark up to 4 RAG configs │
+│ "Best-Preset" embeddings &    │ │ chunk sizes, overlap, vector  │ │ in parallel side-by-side with │
+│ streaming SSE responses.      │ │ stores & reranker models.     │ │ response & latency diffs.     │
+└───────────────────────────────┘ └───────────────────────────────┘ └───────────────────────────────┘
 ```
 
-## Backend API (Current)
+1. **⚡ Quick Chat (`/chat`)**: Rapid document Q&A. Select or upload PDF/TXT documents, automatically configure best-practice embedding presets, and chat with real-time Server-Sent Events (SSE) token streaming, citation inspectors, and session history.
+2. **🛠️ Custom Pipeline Architect (`/setup`)**: Complete step-by-step wizard for tuning:
+   - Chunking strategies: Fixed size, Recursive, Semantic, Chapter-based, Regex, and Sentence-window.
+   - Embedding providers: NVIDIA (`nvidia/nemotron-3-embed-1b`), Hugging Face, Google.
+   - Vector stores & Hybrid search: Dense embeddings + BM25 keyword matching with MMR (Maximal Marginal Relevance).
+   - Custom rerankers & LLM parameters (Gemini, Groq LLaMA 3.3).
+3. **⚖️ Comparison Lab (`/compare`)**: Stage up to 4 pipeline configurations simultaneously. Run identical queries to inspect retrieval diffs, similarity score distributions, latency profiles, and token metrics.
+4. **📊 Evaluation & Metrics Drawer**: Slide-out evaluation panel computing both fast statistical metrics (Precision@K, Recall@K, MRR, nDCG, Hit Rate) and deep LLM-as-a-Judge metrics (Faithfulness, Answer Relevancy, Context Precision).
 
-### Health
-- `GET /`
-- `GET /health`
+---
 
-### Documents (`/api/documents`)
-- `POST /upload`
-- `GET /{doc_id}`
-- `GET /{doc_id}/chunks?config_id=...`
-- `DELETE /{doc_id}`
+## 🏗️ Architecture
 
-### Config (`/api/config`)
-- `POST /`
-- `GET /list`
-- `GET /{config_id}`
-- `GET /{config_id}/export`
-- `POST /import`
-
-### Chat (`/api/chat`)
-- `POST /`
-- `POST /stream`
-- `GET /history/{doc_id}`
-- `POST /reset`
-
-### Compare module (`/compare`)
-- `POST /index`
-- `POST /run`
-- `POST /clear-chromadb`
-
-Note: a legacy compare route also exists at `/api/compare`, but the current Compare page uses `/compare/*`.
-
-## Data and Persistence
-
-- Relational data: SQLite via SQLAlchemy models.
-- Vector storage: Chroma persisted under project directories (compare flow uses its own store).
-- Stored entities include documents, configs, chat messages, evaluations, and metrics.
-
-## Environment Variables
-
-Set only what you need for selected providers/features.
-
-### Common
-- `CHROMA_PERSIST_DIR` (optional)
-
-### LLM
-- `GROQ_API_KEY` (Llama 3.3 via Groq)
-
-### Embeddings
-- `NVIDIA_API_KEY` (NVIDIA embeddings)
-- `HUGGINGFACE_API_KEY` (Hugging Face Inference API fallback/client)
-- `GOOGLE_API_KEY` (if Google embedding provider is used in backend configs)
-
-### Analysis (optional)
-- `ANALYSIS_CONFIDENCE_THRESHOLD` (default `0.5`)
-
-## Local Development
-
-## Prerequisites
-- Python 3.10+
-- Node.js 18+
-- npm
-
-### 1) Backend
-
-```bash
-cd backend
-python -m venv .venv
-source .venv/Scripts/activate   # Windows Git Bash
-# or .venv\Scripts\activate     # Windows PowerShell/CMD
-pip install -r requirements.txt
-uvicorn app.main:app --reload --access-log --log-level info
+```
+[ User Browser / React 19 Frontend ]
+                │
+                │ HTTP Requests / SSE Streaming (with HttpOnly Session Cookie)
+                ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│ FastAPI Backend Application (AsyncIO)                                  │
+│                                                                        │
+│ ┌────────────────────────┐  ┌────────────────────────────────────────┐ │
+│ │ Security & Auth Engine │  │ Rate Limiting & Scope Guard             │ │
+│ │ • Signed session token │  │ • Rolling 1-hr window on LLM,           │ │
+│ │ • Bcrypt hash storage  │  │   embedding, and retrieval calls        │ │
+│ └────────────────────────┘  └────────────────────────────────────────┘ │
+│                                                                        │
+│ ┌────────────────────────────────────────────────────────────────────┐ │
+│ │ Asynchronous Document Ingestion & Chunking Worker                  │ │
+│ │ • PyPDF / Text / OCR / Image extractors                            │ │
+│ │ • BackgroundTasks queue with job polling (zero UI blocking)        │ │
+│ └────────────────────────────────────────────────────────────────────┘ │
+│                                                                        │
+│ ┌────────────────────────┐  ┌────────────────────────────────────────┐ │
+│ │ Vector & Sparse Stores │  │ LLM & Retrieval Engine                 │ │
+│ │ • ChromaDB (Persistent)│  │ • Gemini 2.5 Flash / Groq LLaMA 3.3     │ │
+│ │ • BM25 In-Memory Cache │  │ • Hybrid Reranking & Context Assembly   │ │
+│ └────────────────────────┘  └────────────────────────────────────────┘ │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
-Backend default URL: `http://localhost:8000`
+---
 
-For Docker, the backend source lives in `backend/` and the ASGI app is `app.main:app`.
-The container copies `backend` to `/app/backend` and starts from there; no `/server`
-directory is required for this project layout.
+## 🚀 Key Features
 
-Runtime logs are controlled with:
-- `LOG_LEVEL` (`info` by default)
-- `LOG_FORMAT` (`text` locally, `json` in Docker Compose)
+* **Multi-Format Ingestion**: Supports `.pdf` and `.txt` files with intelligent multi-page extraction, table handling, and optional OCR / CLIP image embeddings.
+* **Non-Blocking Background Indexing**: Asynchronous job queue (`IndexingJobStore`) returns an immediate `job_id` and reports progress percentages, eliminating HTTP timeouts during large document indexing.
+* **Hybrid Search Engine**: Integrates ChromaDB dense embeddings with a cached BM25 sparse keyword retriever, balancing semantic nuance with exact keyword matching.
+* **Automated Best-Preset Selection**: Heuristically selects optimal chunk sizes, overlaps, and models based on uploaded document metrics and character density.
+* **LLM-as-a-Judge Evaluation Suite**:
+  * **Faithfulness**: Validates whether answers are derived strictly from retrieved context (hallucination detection).
+  * **Answer Relevancy**: Penalizes redundant or off-topic responses.
+  * **Context Precision & Recall**: Evaluates retrieval rank quality and coverage.
+* **Enterprise Security & Rate Limiting**:
+  * Cryptographically signed `HttpOnly` session cookies with auto-detecting local/cloud security flags.
+  * Per-user hourly rate limiting on LLMs (15/hr), embeddings (50/hr), and retrieval calls (100/hr) with automated email alerts on threshold breach.
 
-Optional PDF image indexing can be enabled with:
-- `PDF_IMAGE_INDEXING_ENABLED=true`
-- `HF_IMAGE_EMBEDDING_MODEL=openai/clip-vit-base-patch32`
-  - Alternative: `HF_IMAGE_EMBEDDING_MODEL=Qwen/Qwen3-VL-Embedding-2B` (higher quality, heavier runtime)
+---
 
-When enabled, embedded PDF images are extracted, saved under `UPLOAD_DIR`,
-embedded with a local Hugging Face CLIP model, and stored in a sibling Chroma
-collection named `<text_collection>_images`.
-
-### 2) Frontend
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-Frontend default URL: `http://localhost:5173`
-
-If needed, set `VITE_API_URL` in the frontend environment to point to your backend.
-
-## API Rate Limiting
-
-RAG Lab implements per-user rate limiting to prevent API quota exhaustion:
-
-### Limits (1-hour rolling window)
-
-| Feature | Limit | Configurable Via |
-|---------|-------|-----------------|
-| LLM Calls | 15 per hour | `MAX_LLM_CALLS_PER_HOUR` |
-| Embedding Calls | 50 per hour | `MAX_EMBEDDING_CALLS_PER_HOUR` |
-| Retrieval Calls | 100 per hour | `MAX_RETRIEVAL_CALLS_PER_HOUR` |
-
-- **LLM Calls**: Each chat query counts as 1 call (~1 call every 4 minutes at default limit)
-- **Embedding Calls**: Document indexing and embedding operations
-- **Retrieval Calls**: Vector store search operations
-
-When rate limit is exceeded, users receive a `429 Too Many Requests` error and must wait for the 1-hour window to reset.
-
-## Notes and Practical Tips
-
-- First run for new Hugging Face models can be slow due to model resolution and warm-up logs.
-- `307` redirects and some `404` checks in model hub logs are usually normal during model discovery.
-- Compare indexing is config-specific; run `Run & Save Configs` before querying compare results.
-- For large documents and semantic chunking, indexing time can be noticeably higher than fixed-size chunking.
-
-## Tech Stack
+## 🛠️ Tech Stack
 
 ### Backend
-- FastAPI
-- SQLAlchemy
-- Chroma
-- LangChain ecosystem components
-- Groq LLM integration
+- **Framework**: FastAPI (AsyncIO, Pydantic v2)
+- **Database**: SQLite (local) / PostgreSQL with SQLAlchemy & Alembic migrations
+- **Vector Storage**: ChromaDB (`chromadb`)
+- **Sparse Retrieval**: Rank-BM25
+- **LLM Integrations**: Google Gemini API (`gemini-2.5-flash`), Groq API (`llama-3.3-70b-versatile`)
+- **Document Processing**: `pypdf`, `pdfplumber`, `pdf2image`, `pytesseract`
 
 ### Frontend
-- React
-- Vite
-- Tailwind CSS
-- React Router
-- Axios
+- **Framework**: React 19 + Vite
+- **Styling**: Tailwind CSS (Dark zinc & amber design system)
+- **Routing**: React Router DOM v7
+- **Networking**: Axios & Native Fetch with Server-Sent Events (SSE)
+- **Icons**: Lucide-inspired SVG icon system
 
-## License
+---
 
-MIT
+## ⚡ Quick Start (Local Development)
+
+### Prerequisites
+- **Python 3.10+**
+- **Node.js 18+** & **npm**
+
+---
+
+### 1. Backend Setup
+
+```bash
+# Clone the repository
+git clone https://github.com/your-username/rag-lab.git
+cd rag-lab/backend
+
+# Create and activate virtual environment
+python -m venv .venv
+# On Windows (PowerShell):
+.venv\Scripts\Activate.ps1
+# On Linux / macOS / Git Bash:
+source .venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Configure environment
+cp .env.example .env
+```
+
+Edit `backend/.env` with your API keys:
+```env
+AUTH_SECRET_KEY=generate-a-secure-random-string
+FRONTEND_URL=http://localhost:5173
+COOKIE_SECURE=false
+COOKIE_SAMESITE=lax
+
+# Providers (Provide at least one)
+GEMINI_API_KEY=your_gemini_api_key
+GROQ_API_KEY=your_groq_api_key
+NVIDIA_API_KEY=your_nvidia_api_key
+HUGGINGFACE_API_KEY=your_huggingface_api_key
+```
+
+Run the backend server:
+```bash
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+Backend API will be live at `http://127.0.0.1:8000` (Swagger docs at `http://127.0.0.1:8000/docs`).
+
+---
+
+### 2. Frontend Setup
+
+```bash
+cd ../frontend
+
+# Install dependencies
+npm install
+
+# Start development server
+npm run dev
+```
+Frontend will be live at `http://localhost:5173`.
+
+---
+
+### 3. Demo Credentials
+
+The platform is pre-seeded with quick-access demo accounts for local testing:
+
+| Username / Email | Password | Role | Description |
+| :--- | :--- | :--- | :--- |
+| `sample` / `sample@local` | `sample` | User | Default standard user with pre-loaded demo sessions |
+
+
+*(You can also click the **"Fill demo"** button on the `/login` screen to populate credentials instantly).*
+
+---
+
+## 🐳 Running with Docker Compose
+
+You can spin up the full stack in a containerized environment:
+
+```bash
+docker compose up --build
+```
+
+The frontend will be exposed on port `5173` and the backend on port `8000`.
+
+---
+
+## 📡 API Reference Overview
+
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `POST` | `/api/auth/login` | Authenticate user & issue signed session cookie |
+| `GET` | `/api/auth/me` | Fetch active user profile and role |
+| `POST` | `/api/documents/upload` | Upload `.pdf` or `.txt` document |
+| `GET` | `/api/documents/list` | List uploaded user documents |
+| `GET` | `/api/documents/index-status/{job_id}` | Poll background indexing job progress |
+| `POST` | `/api/config/best-preset/apply` | Automatically configure and apply best preset |
+| `POST` | `/api/chat/prepare` | Queue document background indexing for chat |
+| `POST` | `/api/chat/stream` | Real-time SSE streaming answer generation |
+| `GET` | `/api/chat/history/{doc_id}` | Retrieve persisted document conversation history |
+| `POST` | `/compare/run` | Execute multi-config parallel benchmark query |
+| `POST` | `/api/evaluation/report` | Compute statistical & LLM-as-a-judge quality metrics |
+
+---
+
+## 🧪 Testing
+
+```bash
+# Run backend test suite
+cd backend
+pytest
+
+# Run frontend tests
+cd ../frontend
+npm test
+```
+
+---
+
+## 📄 License
+
+This project is licensed under the [MIT License](LICENSE).

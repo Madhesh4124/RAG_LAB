@@ -133,6 +133,9 @@ class PipelineFactory:
                 raise PipelineConfigError("Unknown embedding provider: google")
             elif provider == "nvidia":
                 from app.services.embedding.nvidia_embedder import NvidiaEmbedder
+                raw_model = kwargs.get("model")
+                if raw_model in ("nvidia/nv-embed-v1", "nvidia/llama-3.2-nemoretriever-300m-embed-v1", "nv-embed-v1"):
+                    kwargs["model"] = "nvidia/nemotron-3-embed-1b"
                 return NvidiaEmbedder(**kwargs)
             elif provider == "huggingface":
                 from app.services.embedding.huggingface_api_embedder import HuggingFaceAPIEmbedder
@@ -214,19 +217,28 @@ class PipelineFactory:
         if not config:
             return None
 
-        provider = config.get("provider") or ("gemini" if config.get("model") else None)
+        provider = config.get("provider") or os.getenv("DEFAULT_LLM_PROVIDER", "gemini")
         
-        # Force migration from gemini to groq
-        if provider == "gemini" or not provider:
-            provider = os.getenv("DEFAULT_LLM_PROVIDER", "groq")
-            config["model"] = os.getenv("DEFAULT_LLM_MODEL", "llama-3.3-70b-versatile")
+        temperature = config.get("temperature", 0.2)
+        if provider in ("gemini", "google"):
+            from app.services.llm.gemini_client import GeminiClient
+            model = config.get("model") or os.getenv("DEFAULT_LLM_MODEL", "gemini-2.5-flash")
+            if model in ("gemma-4-31b-it", "gemma-4-27b-it", "gemma-4-31b", "gemma", "gemini-2.5"):
+                model = "gemini-2.5-flash"
+            return GeminiClient(model=model, temperature=temperature)
         
         if provider == "groq":
             from app.services.llm.groq_client import GroqClient
-            model = config.get("model")
+            model = config.get("model") or os.getenv("EVALUATION_LLM_MODEL", "openai/gpt-oss-120b")
             temperature = config.get("temperature", 0.2)
             return GroqClient(model=model, temperature=temperature)
-            
+
+        if provider == "nvidia":
+            from app.services.llm.nvidia_client import NvidiaClient
+            model = config.get("model") or "nvidia/nemotron-3.5-lightning-30b-a3b"
+            temperature = config.get("temperature", 1.0)
+            return NvidiaClient(model=model, temperature=temperature)
+
         return None
 
     @staticmethod
@@ -248,9 +260,13 @@ class PipelineFactory:
             
         elif type_ == "summary":
             from app.services.memory.summary_memory import SummaryMemory
-            if llm_client and hasattr(llm_client, "llm") and llm_client.llm is not None:
+            if llm_client and (hasattr(llm_client, "invoke_prompt") or (hasattr(llm_client, "llm") and llm_client.llm is not None)):
                 def summarizer(text: str) -> str:
-                    return llm_client.llm.invoke(f"Summarize this conversation concisely:\n{text}").content
+                    prompt = f"Summarize this conversation concisely:\n{text}"
+                    if hasattr(llm_client, "invoke_prompt"):
+                        return llm_client.invoke_prompt(prompt)
+                    res = llm_client.llm.invoke(prompt)
+                    return getattr(res, "content", str(res))
                     
                 return SummaryMemory(
                     max_turns_before_summary=max_turns_before_summary,
@@ -304,17 +320,17 @@ class PipelineFactory:
                     "enabled": True,
                     "provider": retriever_cfg.get("reranker_provider", "huggingface_api"),
                     "model": retriever_cfg.get("reranker_model", "BAAI/bge-reranker-v2-m3"),
-                    "max_candidates": int(retriever_cfg.get("rerank_fetch_k", 20)),
-                    "min_candidates": int(retriever_cfg.get("min_candidates", 8)),
+                    "max_candidates": int(retriever_cfg.get("rerank_fetch_k", 6)),
+                    "min_candidates": int(retriever_cfg.get("min_candidates", 3)),
                 }
 
         if isinstance(reranker_cfg, dict) and reranker_cfg.get("enabled"):
             provider = reranker_cfg.get("provider", "huggingface_api")
             model_name = reranker_cfg.get("model", "BAAI/bge-reranker-v2-m3")
-            timeout_seconds = int(reranker_cfg.get("timeout_seconds", 10))
-            max_candidates = int(reranker_cfg.get("max_candidates", 20))
+            timeout_seconds = int(reranker_cfg.get("timeout_seconds", 5))
+            max_candidates = int(reranker_cfg.get("max_candidates", 6))
             max_workers = int(reranker_cfg.get("max_workers", 4))
-            min_candidates = int(reranker_cfg.get("min_candidates", 8))
+            min_candidates = int(reranker_cfg.get("min_candidates", 3))
 
             if provider in ("huggingface_api", "huggingface", "hf_api"):
                 from app.services.retrieval.reranker import HuggingFaceAPIReranker

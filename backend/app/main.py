@@ -2,7 +2,11 @@ import logging
 import os
 import json
 import time
+import warnings
 from contextlib import asynccontextmanager
+
+warnings.filterwarnings("ignore", message=".*coroutine 'ClientResponse.json' was never awaited.*", category=RuntimeWarning)
+warnings.filterwarnings("ignore", message=".*in available_models, but type is unknown.*", category=UserWarning)
 from fastapi import FastAPI, Request, status, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse

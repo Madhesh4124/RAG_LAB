@@ -28,20 +28,29 @@ export default function Preview() {
   }, [docId, configId]);
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-8 space-y-4">
-      <div className="flex justify-between items-center">
+    <div className="w-full max-w-[96%] xl:max-w-[95%] 2xl:max-w-[1760px] mx-auto px-4 sm:px-6 lg:px-10 py-8 space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-3 border-b border-white/[0.08]">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Chunk Preview</h1>
-          <p className="text-sm text-gray-400 mt-1">
+          <div className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[10px] uppercase tracking-[0.2em] font-semibold bg-accent-violet/15 border border-accent-violet/30 text-accent-violet-light mb-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-accent-violet animate-pulse" />
+            Inspection & Verification
+          </div>
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-[#FCF8D8] tracking-tight">Chunk Preview</h1>
+          <p className="text-[#D9DADF]/80 text-sm mt-1">
             See exactly how your document was split. Click any chunk to inspect it.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2.5 flex-wrap">
           <Button variant="secondary" onClick={() => navigate("/setup")}>← Reconfigure</Button>
-          <Button onClick={() => navigate(`/custom-chat?doc=${docId}&config=${configId}`)}>
+          <Button onClick={() => {
+            const docsParam = params.get("docs");
+            navigate(`/custom-chat?doc=${docId}&config=${configId}${docsParam ? `&docs=${encodeURIComponent(docsParam)}` : ""}`);
+          }}>
             Start Chatting →
           </Button>
-          <Button onClick={() => navigate(`/compare?doc=${docId}`)}>Try Compare Mode →</Button>
+          <Button variant="secondary" onClick={() => navigate(`/compare?doc=${docId}`)} trailingIcon={<span>↗</span>}>
+            Try Compare Mode
+          </Button>
         </div>
       </div>
 

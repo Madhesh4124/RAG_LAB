@@ -1,7 +1,8 @@
 import os
 import uuid
 from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form, Query, status, BackgroundTasks
+from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form, Query, status, BackgroundTasks, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -206,6 +207,46 @@ async def preview_chunks(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to preview chunks: {str(e)}")
 
+
+class BulkDeleteRequest(BaseModel):
+    document_ids: List[uuid.UUID]
+
+
+@router.delete("/all", status_code=status.HTTP_200_OK)
+async def delete_all_documents(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = select(Document).where(Document.user_id == current_user.id)
+    docs = (await db.execute(stmt)).scalars().all()
+    count = len(docs)
+    for doc in docs:
+        await db.delete(doc)
+    await db.commit()
+    return {"status": "success", "deleted_count": count}
+
+
+@router.post("/bulk-delete", status_code=status.HTTP_200_OK)
+async def bulk_delete_documents(
+    payload: BulkDeleteRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if not payload.document_ids:
+        return {"status": "success", "deleted_count": 0}
+
+    stmt = select(Document).where(
+        Document.id.in_(payload.document_ids),
+        Document.user_id == current_user.id,
+    )
+    docs = (await db.execute(stmt)).scalars().all()
+    count = len(docs)
+    for doc in docs:
+        await db.delete(doc)
+    await db.commit()
+    return {"status": "success", "deleted_count": count}
+
+
 @router.delete("/{doc_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_document(doc_id: uuid.UUID, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     stmt = select(Document).where(Document.id == doc_id, Document.user_id == current_user.id)
@@ -260,3 +301,19 @@ async def index_document_tables(
     await db.commit()
 
     return {"status": "indexing", "job_id": job_id, "document_id": str(doc_id)}
+
+
+@router.get("/images/{storage_key}")
+async def get_document_image(storage_key: str):
+    """Retrieve an extracted PDF image by its storage key."""
+    from app.services.file_storage import get_file_storage
+
+    storage = get_file_storage()
+    try:
+        data = storage.load(storage_key)
+        ext = storage_key.rsplit(".", 1)[-1].lower() if "." in storage_key else "jpeg"
+        media_type = f"image/{ext}" if ext in ("png", "jpeg", "jpg", "webp", "gif") else "application/octet-stream"
+        return Response(content=data, media_type=media_type)
+    except (FileNotFoundError, OSError):
+        raise HTTPException(status_code=404, detail="Image not found")
+

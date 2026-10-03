@@ -22,7 +22,7 @@ def index_pdf_tables(
     include_header: bool = True,
     context_rows: int = 0,
     embedding_provider: str = "nvidia",
-    embedding_model: str = "nvidia/nv-embed-v1",
+    embedding_model: str = "nvidia/nemotron-3-embed-1b",
 ) -> int:
     """Extract tables from *file_path* and index into a Chroma collection.
 

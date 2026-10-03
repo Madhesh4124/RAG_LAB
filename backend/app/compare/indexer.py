@@ -45,6 +45,8 @@ async def index_config(
     config: RAGConfig,
     document_text: str,
     user_scope: str | None = None,
+    document_pages: List[dict] | None = None,
+    doc_metadata: dict | None = None,
 ) -> IndexResponse:
     collection_name = config.collection_name
 
@@ -71,19 +73,44 @@ async def index_config(
     def _index_sync() -> int:
         embedder = _load_embedder(config.embedding_provider, config.embedding_model)
         chunker = _build_chunker(config, embedder if config.chunk_strategy == "semantic" else None)
-        chunks = chunker.chunk(document_text, {"collection_name": collection_name})
         docs: List[Document] = []
-        for idx, chunk in enumerate(chunks):
-            metadata = dict(chunk.metadata or {})
-            metadata.update(
-                {
-                    "chunk_index": idx,
-                    "chunk_strategy": config.chunk_strategy,
-                    "embedding_provider": config.embedding_provider,
-                    "embedding_model": config.embedding_model,
-                }
-            )
-            docs.append(Document(page_content=chunk.text, metadata=metadata))
+        global_idx = 0
+
+        if document_pages:
+            for page in document_pages:
+                page_text = page.get("text", "")
+                if not page_text.strip():
+                    continue
+                page_meta = dict(page.get("metadata") or {})
+                chunks = chunker.chunk(page_text, {"collection_name": collection_name})
+                for c in chunks:
+                    metadata = dict(c.metadata or {})
+                    metadata.update(page_meta)
+                    metadata.update(
+                        {
+                            "chunk_index": global_idx,
+                            "chunk_strategy": config.chunk_strategy,
+                            "embedding_provider": config.embedding_provider,
+                            "embedding_model": config.embedding_model,
+                            **(doc_metadata or {}),
+                        }
+                    )
+                    docs.append(Document(page_content=c.text, metadata=metadata))
+                    global_idx += 1
+        else:
+            chunks = chunker.chunk(document_text, {"collection_name": collection_name})
+            for idx, chunk in enumerate(chunks):
+                metadata = dict(chunk.metadata or {})
+                metadata.update(
+                    {
+                        "chunk_index": idx,
+                        "chunk_strategy": config.chunk_strategy,
+                        "embedding_provider": config.embedding_provider,
+                        "embedding_model": config.embedding_model,
+                        **(doc_metadata or {}),
+                    }
+                )
+                docs.append(Document(page_content=chunk.text, metadata=metadata))
 
         vectorstore = get_or_load_collection(
             collection_name,

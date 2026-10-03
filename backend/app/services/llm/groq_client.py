@@ -34,7 +34,11 @@ def _build_context(chunks: List[Chunk], max_chunks: int = 8, max_chars: int = 12
     for idx, chunk in enumerate(chunks[:max_chunks], start=1):
         metadata = getattr(chunk, "metadata", {}) or {}
         text = (metadata.get("window_text") or chunk.text or "").strip()
-        if len(text) > 2000:
+        if text.startswith("image://") or metadata.get("modality") == "image":
+            page = metadata.get("page", "unknown")
+            img_name = metadata.get("image_name", "Figure")
+            text = f"[Image/Diagram: {img_name} found on Page {page}]"
+        elif len(text) > 2000:
             text = text[:2000] + "..."
         segment = f"[Chunk {idx}]\n{text}"
         if total + len(segment) > max_chars:
@@ -75,7 +79,10 @@ def _content_to_text(content: Any) -> str:
     return str(content)
 
 def _default_llm_model() -> str:
-    return os.getenv("DEFAULT_LLM_MODEL", "llama-3.3-70b-versatile")
+    candidate = os.getenv("EVALUATION_LLM_MODEL", os.getenv("DEFAULT_LLM_MODEL", "openai/gpt-oss-120b"))
+    if not candidate or "gemini" in candidate.lower() or "gemma" in candidate.lower():
+        return "openai/gpt-oss-120b"
+    return candidate
 
 
 class GroqClient:
@@ -83,7 +90,10 @@ class GroqClient:
 
     def __init__(self, model: str = None, temperature: float = 0.2, system_prompt: str = None):
         self.provider = "groq"
-        self.model_name = model or _default_llm_model()
+        candidate_model = model or _default_llm_model()
+        if not candidate_model or "gemini" in candidate_model.lower() or "gemma" in candidate_model.lower():
+            candidate_model = "openai/gpt-oss-120b"
+        self.model_name = candidate_model
         self.temperature = temperature
         self.system_prompt = system_prompt or (
             "You are an expert research assistant. Answer the user's question based on the provided document context below. "

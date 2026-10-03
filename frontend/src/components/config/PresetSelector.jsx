@@ -9,16 +9,20 @@ const PRESETS = [
 
 export default function PresetSelector({ onSelect, current }) {
   return (
-    <div className="mb-4">
-      <p className="text-xs text-gray-500 font-medium mb-2 uppercase tracking-wide">Quick Presets</p>
-      <div className="flex gap-2 flex-wrap">
+    <div className="flex flex-col sm:items-end gap-1.5">
+      <p className="text-[10px] font-semibold text-white/45 uppercase tracking-wider">Quick Presets</p>
+      <div className="flex gap-1.5 flex-wrap">
         {PRESETS.map(({ key, label, desc }) => (
           <button
             key={key}
+            type="button"
             onClick={() => onSelect(key)}
             title={desc}
-            className="px-3 py-1.5 rounded-lg border text-sm font-medium transition-all
-              hover:border-blue-400 hover:bg-blue-50 border-gray-200 text-gray-600"
+            className={`px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all duration-200
+              ${current === key
+                ? "bg-accent-violet/20 border-accent-violet text-white shadow-[0_0_12px_rgba(221,112,11,0.3)]"
+                : "bg-surface-1/90 border-white/[0.08] text-white/75 hover:bg-white/[0.08] hover:border-white/20 hover:text-white"
+              }`}
           >
             {label}
           </button>

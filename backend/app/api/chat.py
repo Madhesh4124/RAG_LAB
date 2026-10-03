@@ -216,14 +216,19 @@ async def _run_indexing_background(
         indexing_lock = await PipelineManager.get_indexing_lock(f"{user_id}:{config_id}")
         async with indexing_lock:
             for i, doc in enumerate(docs):
+                doc_base = int(i / total * 100)
+                doc_slice = int(100 / total)
+                IndexingJobStore.update(job_id, status="indexing", progress_pct=max(5, doc_base + int(doc_slice * 0.1)))
                 if doc.file_type.lower() == "pdf":
                     try:
                         pages = FileProcessor.extract_pdf_pages(doc.content, doc.filename)
+                        IndexingJobStore.update(job_id, status="indexing", progress_pct=max(10, doc_base + int(doc_slice * 0.35)))
                         await pipeline.aindex_document_with_pages(
                             pages=pages,
                             doc_id=str(doc.id),
                             base_metadata={"filename": doc.filename, "file_type": doc.file_type},
                         )
+                        IndexingJobStore.update(job_id, status="indexing", progress_pct=max(15, doc_base + int(doc_slice * 0.85)))
                         await pipeline.aindex_pdf_images(
                             pdf_content=doc.content,
                             filename=doc.filename,
@@ -376,7 +381,8 @@ async def prepare_chat_session(
         "config_id": str(payload.config_id),
     }
 
-@router.post("/")
+@router.post("")
+@router.post("/", include_in_schema=False)
 async def chat_endpoint(
     query: str = Body(...),
     doc_id: uuid.UUID = Body(...),

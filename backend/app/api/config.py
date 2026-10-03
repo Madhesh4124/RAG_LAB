@@ -66,7 +66,8 @@ async def apply_best_preset(
     await db.refresh(new_config)
     return new_config
 
-@router.post("/", response_model=RAGConfigResponse)
+@router.post("", response_model=RAGConfigResponse)
+@router.post("/", response_model=RAGConfigResponse, include_in_schema=False)
 async def create_config(
     config_in: RAGConfigCreate,
     current_user: User = Depends(get_current_user),

@@ -119,7 +119,21 @@ async def index_config(
             user_scope=user_scope,
         )
         if docs:
-            vectorstore.add_documents(docs)
+            try:
+                vectorstore.add_documents(docs)
+            except Exception as exc:
+                if "malformed" in str(exc).lower() or "code: 11" in str(exc).lower():
+                    from app.compare.collection_registry import _reset_corrupt_chroma_db, _PERSIST_DIR
+                    _reset_corrupt_chroma_db(_PERSIST_DIR)
+                    vectorstore = get_or_load_collection(
+                        collection_name,
+                        config.embedding_provider,
+                        config.embedding_model,
+                        user_scope=user_scope,
+                    )
+                    vectorstore.add_documents(docs)
+                else:
+                    raise
         return len(docs)
 
     chunk_count = await asyncio.to_thread(_index_sync)

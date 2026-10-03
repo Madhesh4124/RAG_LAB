@@ -74,6 +74,38 @@ fi
 
 export UPLOAD_DIR="$UPLOAD_CANDIDATE"
 
+# Auto-heal any corrupted Chroma SQLite files from previous aborted runs
+python -c "
+import sqlite3, os, glob
+persist = os.environ.get('CHROMA_PERSIST_DIR', '')
+dirs = [persist, '/data', '/app/backend', '/app/backend/chroma_db', '/data/chroma_store', '/data/chroma_db']
+checked = set()
+for d in dirs:
+    if not d or not os.path.exists(d): continue
+    for f in glob.glob(os.path.join(d, '**', 'chroma.sqlite3'), recursive=True) + glob.glob(os.path.join(d, 'chroma.sqlite3')):
+        if f in checked: continue
+        checked.add(f)
+        try:
+            con = sqlite3.connect(f)
+            cur = con.cursor()
+            res = cur.execute('PRAGMA integrity_check;').fetchone()
+            con.close()
+            if not res or res[0] != 'ok':
+                print(f'[WARN] Corrupt Chroma database detected at {f}: {res}. Auto-removing to restore service.')
+                for ext in ['', '-wal', '-shm']:
+                    target = f + ext
+                    if os.path.exists(target):
+                        try: os.remove(target)
+                        except Exception: pass
+        except Exception as e:
+            print(f'[WARN] Corrupt Chroma database at {f}: {e}. Removing.')
+            for ext in ['', '-wal', '-shm']:
+                target = f + ext
+                if os.path.exists(target):
+                    try: os.remove(target)
+                    except Exception: pass
+" 2>/dev/null || true
+
 # Run Alembic migrations (async-enabled env.py handles aiosqlite)
 alembic upgrade head
 

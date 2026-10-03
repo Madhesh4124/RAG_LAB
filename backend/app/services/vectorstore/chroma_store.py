@@ -54,6 +54,20 @@ _PERSISTENT_CLIENT_CACHE: dict[str, Any] = {}
 _PERSISTENT_CLIENT_CACHE_LOCK = threading.Lock()
 
 
+def _reset_corrupt_chroma_db(persist_dir: str) -> None:
+    cache_key = str(Path(persist_dir).resolve())
+    with _PERSISTENT_CLIENT_CACHE_LOCK:
+        _PERSISTENT_CLIENT_CACHE.pop(cache_key, None)
+    dir_path = Path(persist_dir)
+    for fname in ['chroma.sqlite3', 'chroma.sqlite3-wal', 'chroma.sqlite3-shm']:
+        target = dir_path / fname
+        if target.exists():
+            try:
+                target.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
 def _get_cached_persistent_client(persist_dir: str):
     cache_key = str(Path(persist_dir).resolve())
     with _PERSISTENT_CLIENT_CACHE_LOCK:
@@ -62,7 +76,14 @@ def _get_cached_persistent_client(persist_dir: str):
         return cached
 
     client_settings = Settings(anonymized_telemetry=False)
-    client = PersistentClient(path=cache_key, settings=client_settings)
+    try:
+        client = PersistentClient(path=cache_key, settings=client_settings)
+    except Exception as exc:
+        if 'malformed' in str(exc).lower() or 'code: 11' in str(exc).lower():
+            _reset_corrupt_chroma_db(persist_dir)
+            client = PersistentClient(path=cache_key, settings=client_settings)
+        else:
+            raise
 
     with _PERSISTENT_CLIENT_CACHE_LOCK:
         _PERSISTENT_CLIENT_CACHE.setdefault(cache_key, client)
@@ -184,13 +205,27 @@ class ChromaStore(BaseVectorStore):
 
         adapter = _EmbedderAdapter(embedder)
         client = _get_cached_persistent_client(self.persist_dir)
-        Chroma.from_documents(
-            documents=docs,
-            embedding=adapter,
-            collection_name=self.collection_name,
-            client=client,
-            collection_metadata=self.collection_metadata,
-        )
+        try:
+            Chroma.from_documents(
+                documents=docs,
+                embedding=adapter,
+                collection_name=self.collection_name,
+                client=client,
+                collection_metadata=self.collection_metadata,
+            )
+        except Exception as exc:
+            if 'malformed' in str(exc).lower() or 'code: 11' in str(exc).lower():
+                _reset_corrupt_chroma_db(self.persist_dir)
+                client = _get_cached_persistent_client(self.persist_dir)
+                Chroma.from_documents(
+                    documents=docs,
+                    embedding=adapter,
+                    collection_name=self.collection_name,
+                    client=client,
+                    collection_metadata=self.collection_metadata,
+                )
+            else:
+                raise
 
     def is_document_indexed(self, doc_id: str, content_hash: str | None = None) -> bool:
         where: Dict[str, Any] = {"doc_id": doc_id}

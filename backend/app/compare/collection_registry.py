@@ -115,6 +115,19 @@ def _load_embedder(embedding_provider: str, embedding_model: str):
         return _EMBEDDER_CACHE[cache_key]
 
 
+def _reset_corrupt_chroma_db(persist_dir: Path) -> None:
+    cache_key = str(persist_dir.resolve())
+    with _CLIENT_CACHE_LOCK:
+        _CLIENT_CACHE.pop(cache_key, None)
+    for fname in ["chroma.sqlite3", "chroma.sqlite3-wal", "chroma.sqlite3-shm"]:
+        target = persist_dir / fname
+        if target.exists():
+            try:
+                target.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
 def _get_cached_client(persist_dir: Path):
     cache_key = str(persist_dir.resolve())
     with _CLIENT_CACHE_LOCK:
@@ -122,7 +135,15 @@ def _get_cached_client(persist_dir: Path):
     if cached is not None:
         return cached
 
-    client = PersistentClient(path=cache_key)
+    try:
+        client = PersistentClient(path=cache_key)
+    except Exception as exc:
+        if "malformed" in str(exc).lower() or "code: 11" in str(exc).lower():
+            _reset_corrupt_chroma_db(persist_dir)
+            client = PersistentClient(path=cache_key)
+        else:
+            raise
+
     with _CLIENT_CACHE_LOCK:
         _CLIENT_CACHE.setdefault(cache_key, client)
         return _CLIENT_CACHE[cache_key]
@@ -144,12 +165,22 @@ def get_or_load_collection(
             embedding_function=embedder,
             client=_get_cached_client(_PERSIST_DIR),
         )
-    except TypeError:
-        return Chroma(
-            collection_name=scoped_collection_name,
-            embedding_function=embedder,
-            persist_directory=str(_PERSIST_DIR),
-        )
+    except Exception as exc:
+        if "malformed" in str(exc).lower() or "code: 11" in str(exc).lower():
+            _reset_corrupt_chroma_db(_PERSIST_DIR)
+            return Chroma(
+                collection_name=scoped_collection_name,
+                embedding_function=embedder,
+                client=_get_cached_client(_PERSIST_DIR),
+            )
+        try:
+            return Chroma(
+                collection_name=scoped_collection_name,
+                embedding_function=embedder,
+                persist_directory=str(_PERSIST_DIR),
+            )
+        except Exception:
+            raise
 
 
 def collection_exists(

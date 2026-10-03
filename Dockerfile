@@ -37,15 +37,20 @@ RUN chmod +x /app/backend/start.sh
 
 WORKDIR /app/backend
 
-# P4.2: Run as a non-root user for security.
-RUN addgroup --gid 1001 appgroup \
- && adduser --uid 1001 --gid 1001 --disabled-password --no-create-home --gecos "" appuser \
- && chown -R appuser:appgroup /app
+# P4.2: Run as non-root user with home and cache directories.
+# Hugging Face Spaces defaults to UID 1000.
+RUN useradd -m -u 1000 -s /bin/bash appuser \
+ && mkdir -p /home/appuser/.cache /app/backend/chroma_db /app/backend/uploads \
+ && chown -R appuser:appuser /home/appuser /app \
+ && chmod -R 777 /home/appuser/.cache /tmp
 
 USER appuser
 
-# Ensure the app uses an on-disk DB location under /app so it's writable.
-ENV CHROMA_PERSIST_DIR=/app/backend
+ENV HOME=/home/appuser \
+    HF_HOME=/home/appuser/.cache/huggingface \
+    TRANSFORMERS_CACHE=/home/appuser/.cache/huggingface \
+    TORCH_HOME=/home/appuser/.cache/torch \
+    CHROMA_PERSIST_DIR=/app/backend/chroma_db
 
 # Use start script to prepare DB, run migrations, then start Gunicorn.
 CMD ["/app/backend/start.sh"]

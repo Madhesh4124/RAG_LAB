@@ -99,12 +99,22 @@ def _get_eval_llm_client(fallback_client=None):
     if eval_provider == "groq":
         try:
             from app.services.llm.groq_client import GroqClient
-            eval_model = os.getenv("EVALUATION_LLM_MODEL", "openai/gpt-oss-20b")
+            eval_model = os.getenv("EVALUATION_LLM_MODEL", "openai/gpt-oss-120b")
             client = GroqClient(model=eval_model, temperature=0.0)
             if getattr(client, "llm", None) is not None:
                 return client
         except Exception as e:
             logger.warning("Failed to initialize Groq evaluation client: %s", e)
+
+    # Fallback to NVIDIA NIM
+    try:
+        from app.services.llm.nvidia_client import NvidiaClient
+        client = NvidiaClient(model="nvidia/nemotron-3.5-lightning-30b-a3b", temperature=0.0)
+        if getattr(client, "llm", None) is not None:
+            return client
+    except Exception as e:
+        logger.warning("Failed to initialize NVIDIA evaluation client: %s", e)
+
     return fallback_client
 
 

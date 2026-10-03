@@ -8,8 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.document_summary import DocumentSummary
+from typing import Any, List, Optional
 from app.services.chunking.base import Chunk
-from app.services.llm.gemini_client import GeminiClient
 
 _DEFAULT_CHUNK_SUMMARY_PROMPT = "Summarize the following document chunk in 2-3 concise bullet points. Keep only essential facts.\n\n"
 _DEFAULT_COMBINE_PROMPT = (
@@ -91,7 +91,7 @@ class SummaryService:
         document_id: uuid.UUID,
         config_id: uuid.UUID,
         chunks: List[Chunk],
-        llm_client: Optional[GeminiClient],
+        llm_client: Optional[Any],
     ) -> Optional[str]:
         existing = await SummaryService.get_summary(db, user_id, document_id, config_id)
         if existing and not is_truncated(existing):
@@ -113,7 +113,7 @@ class SummaryService:
     @staticmethod
     async def generate_doc_summary(
         chunks: List[Chunk],
-        llm_client: Optional[GeminiClient],
+        llm_client: Optional[Any],
     ) -> Optional[str]:
         if not chunks or not llm_client or not getattr(llm_client, "llm", None):
             return None
@@ -157,7 +157,7 @@ class SummaryService:
         return await SummaryService._invoke_llm_text(llm_client, prompt)
 
     @staticmethod
-    async def _invoke_llm_text(llm_client: GeminiClient, prompt: str) -> str:
+    async def _invoke_llm_text(llm_client: Any, prompt: str) -> str:
         try:
             timeout_s = float(os.getenv("DOC_SUMMARY_LLM_TIMEOUT_SECONDS", "45"))
         except (ValueError, TypeError):

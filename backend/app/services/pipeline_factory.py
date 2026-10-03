@@ -217,27 +217,25 @@ class PipelineFactory:
         if not config:
             return None
 
-        provider = config.get("provider") or os.getenv("DEFAULT_LLM_PROVIDER", "gemini")
+        provider = config.get("provider") or os.getenv("DEFAULT_LLM_PROVIDER", "nvidia")
         
         temperature = config.get("temperature", 0.2)
+        if provider == "nvidia":
+            from app.services.llm.nvidia_client import NvidiaClient
+            model = config.get("model") or "nvidia/nemotron-3.5-lightning-30b-a3b"
+            return NvidiaClient(model=model, temperature=temperature)
+
+        if provider == "groq":
+            from app.services.llm.groq_client import GroqClient
+            model = config.get("model") or os.getenv("EVALUATION_LLM_MODEL", "openai/gpt-oss-120b")
+            return GroqClient(model=model, temperature=temperature)
+
         if provider in ("gemini", "google"):
             from app.services.llm.gemini_client import GeminiClient
             model = config.get("model") or os.getenv("DEFAULT_LLM_MODEL", "gemini-2.5-flash")
             if model in ("gemma-4-31b-it", "gemma-4-27b-it", "gemma-4-31b", "gemma", "gemini-2.5"):
                 model = "gemini-2.5-flash"
             return GeminiClient(model=model, temperature=temperature)
-        
-        if provider == "groq":
-            from app.services.llm.groq_client import GroqClient
-            model = config.get("model") or os.getenv("EVALUATION_LLM_MODEL", "openai/gpt-oss-120b")
-            temperature = config.get("temperature", 0.2)
-            return GroqClient(model=model, temperature=temperature)
-
-        if provider == "nvidia":
-            from app.services.llm.nvidia_client import NvidiaClient
-            model = config.get("model") or "nvidia/nemotron-3.5-lightning-30b-a3b"
-            temperature = config.get("temperature", 1.0)
-            return NvidiaClient(model=model, temperature=temperature)
 
         return None
 

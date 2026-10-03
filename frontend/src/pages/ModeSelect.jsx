@@ -142,7 +142,7 @@ export default function ModeSelect() {
           <span>·</span>
           <span>Vector Embeddings: NVIDIA / HuggingFace</span>
           <span>·</span>
-          <span>LLM: Gemini / Groq</span>
+          <span>LLM: NVIDIA Nemotron / Groq</span>
         </div>
         <span className="text-emerald-400/80">● Local Database Connected</span>
       </div>

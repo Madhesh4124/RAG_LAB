@@ -233,17 +233,20 @@ export function LLMStep({ memoryConfig, onMemoryChange }) {
           <div className="mt-2.5 flex items-center justify-between p-3.5 rounded-xl border border-white/10 bg-surface-2/80">
             <div className="flex items-center gap-2.5">
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="text-sm font-bold text-white">gemini-2.5-flash</span>
-              <span className="text-xs text-white/50">(Google AI Studio)</span>
+              <span className="text-sm font-bold text-white">nemotron-3.5-lightning-30b-a3b</span>
+              <span className="text-xs text-white/50">(NVIDIA NIM)</span>
             </div>
             <span className="text-[11px] font-semibold text-accent-violet-light bg-accent-violet/15 px-2.5 py-1 rounded-lg border border-accent-violet/25">
-              Primary LLM
+              Generation LLM
             </span>
           </div>
           <div className="mt-3 p-3 rounded-xl bg-white/[0.03] border border-white/[0.06] text-xs text-white/60 space-y-1">
-            <p className="font-semibold text-white/80">Resilient Fallback Hierarchy:</p>
+            <p className="font-semibold text-white/80">Model Architecture:</p>
             <p className="text-[11px] font-mono text-white/50">
-              1. Google Gemini 2.5 Flash ➔ 2. NVIDIA Nemotron 3.5 30B ➔ 3. Groq GPT-OSS 120B
+              Generation: NVIDIA Nemotron 3.5 30B (Fallback: Groq GPT-OSS 120B)
+            </p>
+            <p className="text-[11px] font-mono text-white/50">
+              Evaluation: Groq GPT-OSS 120B (Fallback: NVIDIA Nemotron 3.5 30B)
             </p>
           </div>
         </div>

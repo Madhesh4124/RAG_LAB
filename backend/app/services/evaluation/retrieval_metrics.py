@@ -45,6 +45,19 @@ def _get_evaluator_llm(llm_client: Any = None) -> Any:
         except Exception as e:
             logger.warning("Could not initialize dedicated Groq evaluation LLM: %s", e)
 
+    nvidia_api_key = os.getenv("NVIDIA_API_KEY")
+    if nvidia_api_key:
+        try:
+            from langchain_nvidia_ai_endpoints import ChatNVIDIA
+            return ChatNVIDIA(
+                model="nvidia/nemotron-3.5-lightning-30b-a3b",
+                api_key=nvidia_api_key,
+                temperature=0.0,
+                max_tokens=2048,
+            )
+        except Exception as e:
+            logger.warning("Could not initialize fallback NVIDIA evaluation LLM: %s", e)
+
     if llm_client is not None:
         if hasattr(llm_client, "fallback_client") and llm_client.fallback_client:
             fb = llm_client.fallback_client
@@ -331,9 +344,25 @@ def build_retrieval_metrics_report(
             }
         )
 
+    # Compute robust heuristic fallback estimates if LLM evaluation is absent
+    heuristic_faithfulness = None
+    heuristic_relevancy = None
+    if answer and not answer.startswith("[LLM Error"):
+        ans_terms = _tokenize(answer)
+        if ans_terms:
+            ctx_text = " ".join(_chunk_text(c) for c in retrieved_chunks)
+            ctx_terms = _tokenize(ctx_text)
+            overlap_ctx = len(ans_terms & ctx_terms)
+            heuristic_faithfulness = round(min(1.0, max(0.0, overlap_ctx / max(1, len(ans_terms)))), 3)
+
+        q_terms = _tokenize(query)
+        if q_terms and ans_terms:
+            overlap_q = len(q_terms & ans_terms)
+            heuristic_relevancy = round(min(1.0, max(0.0, overlap_q / max(1, len(q_terms)))), 3)
+
     answer_metrics = {
-        "faithfulness": None,
-        "answer_relevancy": None,
+        "faithfulness": heuristic_faithfulness,
+        "answer_relevancy": heuristic_relevancy,
         "context_precision": precision_at_k,
         "context_recall": recall_at_k,
     }

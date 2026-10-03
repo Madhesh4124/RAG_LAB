@@ -9,7 +9,6 @@ from dotenv import load_dotenv
 env_path = Path(__file__).resolve().parents[3] / ".env"
 load_dotenv(dotenv_path=env_path, override=True)
 
-from app.services.llm.gemini_client import GeminiClient
 
 _INTENT = Literal["global", "local"]
 
@@ -36,25 +35,28 @@ def _get_classifier_client():
         except Exception:
             pass
 
-    # Separate model/env so intent routing can be tuned independently.
-    model = os.getenv("QUERY_CLASSIFIER_MODEL", os.getenv("DEFAULT_LLM_MODEL", "gemini-2.5-flash"))
-    try:
-        client = GeminiClient(
-            model=model,
-            temperature=0.0,
-            system_prompt=(
-                "You classify user queries for RAG routing. "
-                "Return ONLY strict JSON with the schema: "
-                '{"intent":"global|local","confidence":0.0-1.0}. '
-                "Use global for whole-document overview/summary intent. "
-                "Use local for specific section/page/fact/detail lookup."
-            ),
-        )
-        if not getattr(client, "llm", None):
-            return None
-        return client
-    except Exception:
-        return None
+    # Fallback to NVIDIA NIM
+    nvidia_api_key = os.getenv("NVIDIA_API_KEY")
+    if nvidia_api_key:
+        try:
+            from app.services.llm.nvidia_client import NvidiaClient
+            client = NvidiaClient(
+                model="nvidia/nemotron-3.5-lightning-30b-a3b",
+                temperature=0.0,
+                system_prompt=(
+                    "You classify user queries for RAG routing. "
+                    "Return ONLY strict JSON with the schema: "
+                    '{"intent":"global|local","confidence":0.0-1.0}. '
+                    "Use global for whole-document overview/summary intent. "
+                    "Use local for specific section/page/fact/detail lookup."
+                ),
+            )
+            if getattr(client, "llm", None):
+                return client
+        except Exception:
+            pass
+
+    return None
 
 
 def _parse_intent(payload: str) -> _INTENT | None:

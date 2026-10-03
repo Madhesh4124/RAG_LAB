@@ -30,7 +30,7 @@ const DEFAULTS = {
   embedder:    { provider: "nvidia", model: "nvidia/nemotron-3-embed-1b" },
   vectorstore: { type: "chroma", collection_name: "my_collection" },
   retriever:   { type: "hybrid", retrieval_type: "hybrid", top_k: 5, similarity_threshold: 0.0, alpha: 0.7, lambda_mult: 0.5, reranker_enabled: false, reranker_provider: "huggingface_api", reranker_model: "BAAI/bge-reranker-base" },
-  llm:         { provider: "gemini", model: "gemini-2.5-flash" },
+  llm:         { provider: "nvidia", model: "nvidia/nemotron-3.5-lightning-30b-a3b" },
   memory:      { type: "buffer", max_turns: 5, max_turns_before_summary: 5 },
 };
 
@@ -50,8 +50,12 @@ function loadSavedConfig() {
     const raw = localStorage.getItem(CONFIG_STORAGE_KEY);
     if (!raw) return { config: DEFAULTS, step: 0 };
     const parsed = JSON.parse(raw);
+    let cfg = parsed?.config || DEFAULTS;
+    if (cfg.llm?.provider === "gemini" || cfg.llm?.model?.includes("gemini")) {
+      cfg = { ...cfg, llm: { provider: "nvidia", model: "nvidia/nemotron-3.5-lightning-30b-a3b" } };
+    }
     return {
-      config: parsed?.config || DEFAULTS,
+      config: cfg,
       step: typeof parsed?.step === "number" ? parsed.step : 0,
     };
   } catch {

@@ -5,7 +5,6 @@ import time
 import uuid
 from typing import Any, List, Tuple
 
-from langchain_google_genai import ChatGoogleGenerativeAI
 
 from app.compare.collection_registry import get_or_load_collection
 from app.compare.utils import calc_avg_similarity, filter_by_threshold, derive_config_signature
@@ -22,45 +21,56 @@ _LLM_CACHE: dict[tuple, Any] = {}
 _LLM_CACHE_LOCK = threading.Lock()
 
 
-def _get_cached_compare_llm(model: str = "openai/gpt-oss-120b", api_key: str | None = None) -> Any:
-    groq_api_key = os.getenv("GROQ_API_KEY")
-    if groq_api_key:
-        cache_key = ("groq", "openai/gpt-oss-120b", groq_api_key)
+def _get_cached_compare_llm(model: str = "nvidia/nemotron-3.5-lightning-30b-a3b", api_key: str | None = None) -> Any:
+    # 1. Primary: NVIDIA NIM (nemotron-3.5-lightning-30b-a3b)
+    nvidia_api_key = api_key or os.getenv("NVIDIA_API_KEY")
+    if nvidia_api_key:
+        cache_key = ("nvidia", model, nvidia_api_key)
         with _LLM_CACHE_LOCK:
             cached = _LLM_CACHE.get(cache_key)
         if cached is not None:
             return cached
-        from langchain_groq import ChatGroq
-        llm = ChatGroq(
-            model="openai/gpt-oss-120b",
-            temperature=0,
-            api_key=groq_api_key,
-            max_tokens=2048,
-            max_retries=1,
-        )
+        try:
+            from langchain_nvidia_ai_endpoints import ChatNVIDIA
+            llm = ChatNVIDIA(
+                model=model,
+                api_key=nvidia_api_key,
+                temperature=0.2,
+                max_tokens=2048,
+            )
+            with _LLM_CACHE_LOCK:
+                _LLM_CACHE.setdefault(cache_key, llm)
+                return _LLM_CACHE[cache_key]
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("ChatNVIDIA initialization failed (%s); trying Groq", exc)
+
+    # 2. Fallback: Groq (openai/gpt-oss-120b)
+    groq_api_key = os.getenv("GROQ_API_KEY")
+    if groq_api_key:
+        fallback_model = "openai/gpt-oss-120b"
+        cache_key = ("groq", fallback_model, groq_api_key)
         with _LLM_CACHE_LOCK:
-            _LLM_CACHE.setdefault(cache_key, llm)
-            return _LLM_CACHE[cache_key]
+            cached = _LLM_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+        try:
+            from langchain_groq import ChatGroq
+            llm = ChatGroq(
+                model=fallback_model,
+                temperature=0.0,
+                api_key=groq_api_key,
+                max_tokens=2048,
+                max_retries=1,
+            )
+            with _LLM_CACHE_LOCK:
+                _LLM_CACHE.setdefault(cache_key, llm)
+                return _LLM_CACHE[cache_key]
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("ChatGroq initialization failed: %s", exc)
 
-    gemini_key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-    if not gemini_key:
-        raise ValueError("Neither GROQ_API_KEY nor GEMINI_API_KEY/GOOGLE_API_KEY is set.")
-
-    cache_key = ("gemini", "gemini-2.5-flash", gemini_key)
-    with _LLM_CACHE_LOCK:
-        cached = _LLM_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
-
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
-        temperature=0,
-        google_api_key=gemini_key,
-        max_retries=1,
-    )
-    with _LLM_CACHE_LOCK:
-        _LLM_CACHE.setdefault(cache_key, llm)
-        return _LLM_CACHE[cache_key]
+    raise ValueError("Neither NVIDIA_API_KEY nor GROQ_API_KEY is available for compare generation.")
 
 
 def _to_similarity(score: float) -> float:
@@ -277,7 +287,29 @@ async def run_single_config(
         llm_response = await asyncio.to_thread(llm.invoke, prompt)
         answer = str(getattr(llm_response, "content", "")).strip()
     except Exception as exc:
-        answer = f"[LLM Error: {str(exc)}]"
+        import logging
+        logging.getLogger(__name__).warning("Primary compare generation failed (%s); trying Groq fallback", exc)
+        try:
+            groq_key = os.getenv("GROQ_API_KEY")
+            if groq_key:
+                from langchain_groq import ChatGroq
+                fb_llm = ChatGroq(
+                    model="openai/gpt-oss-120b",
+                    temperature=0.0,
+                    api_key=groq_key,
+                    max_tokens=2048,
+                    max_retries=1,
+                )
+                llm_response = await asyncio.to_thread(fb_llm.invoke, prompt)
+                answer = str(getattr(llm_response, "content", "")).strip()
+            else:
+                raise exc
+        except Exception as fb_exc:
+            logging.getLogger(__name__).error("Fallback compare generation also failed: %s", fb_exc)
+            if chunks:
+                answer = "Based on retrieved context:\n\n" + "\n\n".join(chunks[:2])
+            else:
+                answer = "No relevant context found to answer the query."
 
     end = time.perf_counter()
     latency_ms = (end - start) * 1000.0

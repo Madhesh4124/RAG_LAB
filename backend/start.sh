@@ -122,5 +122,5 @@ esac
 
 # Exec Gunicorn
 exec gunicorn app.main:app -k uvicorn.workers.UvicornWorker -w "$EFFECTIVE_WORKERS" \
-  --bind 0.0.0.0:${PORT:-7860} --timeout ${GUNICORN_TIMEOUT:-120} --log-level ${LOG_LEVEL:-info} \
+  --bind 0.0.0.0:${PORT:-7860} --timeout ${GUNICORN_TIMEOUT:-300} --log-level ${LOG_LEVEL:-info} \
   --access-logfile - --error-logfile - --capture-output

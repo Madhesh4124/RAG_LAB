@@ -32,7 +32,8 @@ def _get_evaluator_llm(llm_client: Any = None) -> Any:
     eval_provider = os.getenv("EVALUATION_LLM_PROVIDER", "groq")
     eval_model = os.getenv("EVALUATION_LLM_MODEL", "openai/gpt-oss-120b")
 
-    if (eval_provider == "groq" or groq_api_key) and groq_api_key:
+    # 1. Prefer Groq if available for ultra-fast (sub-second) evaluation
+    if groq_api_key:
         try:
             from langchain_groq import ChatGroq
             return ChatGroq(
@@ -41,11 +42,13 @@ def _get_evaluator_llm(llm_client: Any = None) -> Any:
                 api_key=groq_api_key,
                 max_tokens=2048,
                 max_retries=1,
+                request_timeout=15.0,
                 model_kwargs={"response_format": {"type": "json_object"}},
             )
         except Exception as e:
             logger.warning("Could not initialize dedicated Groq evaluation LLM: %s", e)
 
+    # 2. NVIDIA NIM fallback with 15s timeout and thinking disabled
     nvidia_api_key = os.getenv("NVIDIA_API_KEY")
     if nvidia_api_key:
         try:
@@ -54,8 +57,9 @@ def _get_evaluator_llm(llm_client: Any = None) -> Any:
                 model="nvidia/nemotron-3.5-lightning-30b-a3b",
                 api_key=nvidia_api_key,
                 temperature=0.0,
-                max_completion_tokens=2048,
-                model_kwargs={},
+                max_completion_tokens=1024,
+                timeout=15.0,
+                model_kwargs={"chat_template_kwargs": {"enable_thinking": False}},
             )
         except Exception as e:
             logger.warning("Could not initialize fallback NVIDIA evaluation LLM: %s", e)
@@ -202,9 +206,9 @@ def _heuristic_relevance(query: str, chunks: List[Any]) -> List[bool]:
     return flags
 
 
-def judge_chunk_relevance(query: str, chunks: List[Any], llm_client: Any = None) -> List[bool]:
-    if not chunks:
-        return []
+def judge_chunk_relevance(query: str, chunks: List[Any], llm_client: Any = None, allow_llm_judge: bool = False) -> List[bool]:
+    if not chunks or not allow_llm_judge or llm_client is None:
+        return _heuristic_relevance(query, chunks)
 
     llm = _get_evaluator_llm(llm_client)
     if llm is None:
@@ -288,6 +292,7 @@ def build_retrieval_metrics_report(
     query_mode: Optional[str] = None,
     precomputed_retrieved_flags: Optional[List[bool]] = None,
     precomputed_candidate_flags: Optional[List[bool]] = None,
+    allow_llm_judge: bool = False,
 ) -> Dict[str, Any]:
     retrieval_config = retrieval_config or {}
     normalized_retrieved = [_normalize_chunk(chunk) for chunk in retrieved_chunks]
@@ -295,13 +300,17 @@ def build_retrieval_metrics_report(
 
     if precomputed_retrieved_flags is not None:
         retrieved_flags = precomputed_retrieved_flags
+    elif allow_llm_judge and llm_client is not None:
+        retrieved_flags = judge_chunk_relevance(query, normalized_retrieved, llm_client=llm_client, allow_llm_judge=True)
     else:
-        retrieved_flags = judge_chunk_relevance(query, normalized_retrieved, llm_client=llm_client)
+        retrieved_flags = _heuristic_relevance(query, normalized_retrieved)
 
     if precomputed_candidate_flags is not None:
         candidate_flags = precomputed_candidate_flags
+    elif allow_llm_judge and llm_client is not None:
+        candidate_flags = judge_chunk_relevance(query, normalized_candidates, llm_client=llm_client, allow_llm_judge=True)
     else:
-        candidate_flags = judge_chunk_relevance(query, normalized_candidates, llm_client=llm_client)
+        candidate_flags = _heuristic_relevance(query, normalized_candidates)
 
     k = len(normalized_retrieved)
     relevant_retrieved = sum(1 for flag in retrieved_flags if flag)

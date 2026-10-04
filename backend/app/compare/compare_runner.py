@@ -229,46 +229,66 @@ async def run_single_config(
         ]
 
         global_eval = None
-        try:
-            from app.services.evaluation.retrieval_metrics import unified_deep_evaluation, _get_evaluator_llm
-            eval_llm = _get_evaluator_llm(_LLMWrapper(llm))
-            unified_res = None
-            if eval_llm and chunks:
-                try:
-                    unified_res = await asyncio.to_thread(
-                        unified_deep_evaluation,
-                        query=query,
-                        answer=answer,
-                        retrieved_chunks=retrieved_items,
-                        candidate_chunks=candidate_items,
-                        llm_client=_LLMWrapper(eval_llm),
-                    )
-                except Exception as e:
-                    import logging
-                    logging.getLogger(__name__).warning("Compare global unified evaluation skipped: %s", e)
+        if include_evaluation:
+            try:
+                from app.services.evaluation.retrieval_metrics import unified_deep_evaluation, _get_evaluator_llm
+                eval_llm = _get_evaluator_llm(_LLMWrapper(llm))
+                unified_res = None
+                if eval_llm and chunks:
+                    try:
+                        unified_res = await asyncio.to_thread(
+                            unified_deep_evaluation,
+                            query=query,
+                            answer=answer,
+                            retrieved_chunks=retrieved_items,
+                            candidate_chunks=candidate_items,
+                            llm_client=_LLMWrapper(eval_llm),
+                        )
+                    except Exception as e:
+                        import logging
+                        logging.getLogger(__name__).warning("Compare global unified evaluation skipped: %s", e)
 
-            global_eval = build_retrieval_metrics_report(
-                query=query,
-                answer=answer,
-                retrieved_chunks=retrieved_items,
-                candidate_chunks=candidate_items,
-                llm_client=_LLMWrapper(eval_llm or llm),
-                retrieval_config={
-                    "type": "compare",
-                    "top_k": config.top_k,
-                    "similarity_threshold": config.threshold,
-                },
-                query_mode="global",
-                precomputed_retrieved_flags=unified_res.get("retrieved_flags") if unified_res else None,
-                precomputed_candidate_flags=unified_res.get("candidate_flags") if unified_res else None,
-            )
-            if unified_res:
-                for key in ("faithfulness", "answer_relevancy", "context_recall"):
-                    if unified_res.get(key) is not None:
-                        global_eval.setdefault("answer_metrics", {})[key] = unified_res[key]
-        except Exception as exc:
-            import logging
-            logging.getLogger(__name__).error("Failed building global compare evaluation: %s", exc)
+                global_eval = build_retrieval_metrics_report(
+                    query=query,
+                    answer=answer,
+                    retrieved_chunks=retrieved_items,
+                    candidate_chunks=candidate_items,
+                    llm_client=_LLMWrapper(eval_llm or llm),
+                    retrieval_config={
+                        "type": "compare",
+                        "top_k": config.top_k,
+                        "similarity_threshold": config.threshold,
+                    },
+                    query_mode="global",
+                    precomputed_retrieved_flags=unified_res.get("retrieved_flags") if unified_res else None,
+                    precomputed_candidate_flags=unified_res.get("candidate_flags") if unified_res else None,
+                )
+                if unified_res:
+                    for key in ("faithfulness", "answer_relevancy", "context_recall"):
+                        if unified_res.get(key) is not None:
+                            global_eval.setdefault("answer_metrics", {})[key] = unified_res[key]
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).error("Failed building global compare evaluation: %s", exc)
+        else:
+            try:
+                global_eval = build_retrieval_metrics_report(
+                    query=query,
+                    answer=answer,
+                    retrieved_chunks=retrieved_items,
+                    candidate_chunks=candidate_items,
+                    llm_client=None,
+                    retrieval_config={
+                        "type": "compare",
+                        "top_k": config.top_k,
+                        "similarity_threshold": config.threshold,
+                    },
+                    query_mode="global",
+                    allow_llm_judge=False,
+                )
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).warning("Failed building instant global compare metrics: %s", exc)
 
         return ConfigResult(
             config=config,

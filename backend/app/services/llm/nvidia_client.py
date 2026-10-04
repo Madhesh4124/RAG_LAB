@@ -115,8 +115,8 @@ class NvidiaClient:
                     api_key=api_key,
                     temperature=self.temperature,
                     top_p=self.top_p,
-                    max_tokens=self.max_tokens,
-                    model_kwargs=model_kwargs if model_kwargs else None,
+                    max_completion_tokens=self.max_tokens,
+                    model_kwargs=model_kwargs,
                 )
                 logger.info(
                     "Initialized ChatNVIDIA client model=%s temperature=%s",

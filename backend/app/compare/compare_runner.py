@@ -36,7 +36,8 @@ def _get_cached_compare_llm(model: str = "nvidia/nemotron-3.5-lightning-30b-a3b"
                 model=model,
                 api_key=nvidia_api_key,
                 temperature=0.2,
-                max_tokens=2048,
+                max_completion_tokens=2048,
+                model_kwargs={},
             )
             with _LLM_CACHE_LOCK:
                 _LLM_CACHE.setdefault(cache_key, llm)
@@ -275,7 +276,15 @@ async def run_single_config(
     chunks = [_extract_text(doc) for doc, _ in filtered_results]
     scores = [round(float(score), 4) for _, score in filtered_results]
 
-    context = "\n\n".join(chunks) if chunks else "No relevant context retrieved."
+    compacted_context = []
+    total_chars = 0
+    for c in chunks:
+        txt = c[:2000] + "..." if len(c) > 2000 else c
+        if total_chars + len(txt) > 10000 and compacted_context:
+            break
+        compacted_context.append(txt)
+        total_chars += len(txt)
+    context = "\n\n---\n\n".join(compacted_context) if compacted_context else "No relevant context retrieved."
     prompt = (
         "Context:\n"
         f"{context}\n\n"

@@ -41,6 +41,7 @@ def _get_evaluator_llm(llm_client: Any = None) -> Any:
                 api_key=groq_api_key,
                 max_tokens=2048,
                 max_retries=1,
+                model_kwargs={"response_format": {"type": "json_object"}},
             )
         except Exception as e:
             logger.warning("Could not initialize dedicated Groq evaluation LLM: %s", e)
@@ -53,7 +54,8 @@ def _get_evaluator_llm(llm_client: Any = None) -> Any:
                 model="nvidia/nemotron-3.5-lightning-30b-a3b",
                 api_key=nvidia_api_key,
                 temperature=0.0,
-                max_tokens=2048,
+                max_completion_tokens=2048,
+                model_kwargs={},
             )
         except Exception as e:
             logger.warning("Could not initialize fallback NVIDIA evaluation LLM: %s", e)
@@ -345,8 +347,8 @@ def build_retrieval_metrics_report(
         )
 
     # Compute robust heuristic fallback estimates if LLM evaluation is absent
-    heuristic_faithfulness = None
-    heuristic_relevancy = None
+    heuristic_faithfulness = 0.5 if (answer and not answer.startswith("[LLM Error")) else None
+    heuristic_relevancy = 0.5 if (answer and not answer.startswith("[LLM Error")) else None
     if answer and not answer.startswith("[LLM Error"):
         ans_terms = _tokenize(answer)
         if ans_terms:
@@ -397,6 +399,74 @@ def build_retrieval_metrics_report(
     }
 
 
+def _parse_evaluator_json(content: str) -> Dict[str, Any]:
+    """Parse JSON from evaluator response, gracefully stripping thinking preambles and code fences."""
+    if not content:
+        return {}
+    cleaned = re.sub(r"<think>[\s\S]*?</think>", "", content, flags=re.IGNORECASE).strip()
+
+    # 1. Code fence matching
+    fence_match = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", cleaned, flags=re.IGNORECASE)
+    if fence_match:
+        try:
+            return json.loads(fence_match.group(1).strip())
+        except Exception:
+            pass
+
+    # 2. Direct JSON decode
+    try:
+        return json.loads(cleaned)
+    except Exception:
+        pass
+
+    # 3. Scan for JSON objects using raw_decode to skip thoughts/preambles
+    decoder = json.JSONDecoder()
+    best_candidate: Dict[str, Any] = {}
+    pos = 0
+    target_keys = ("faithfulness", "answer_relevancy", "context_recall", "retrieved_relevance", "candidate_relevance")
+    while True:
+        pos = cleaned.find("{", pos)
+        if pos == -1:
+            break
+        try:
+            obj, _ = decoder.raw_decode(cleaned[pos:])
+            if isinstance(obj, dict):
+                matching_keys = sum(1 for k in target_keys if k in obj)
+                if matching_keys > len(best_candidate):
+                    best_candidate = obj
+                    if matching_keys >= 3:
+                        return best_candidate
+        except Exception:
+            pass
+        pos += 1
+
+    if best_candidate:
+        return best_candidate
+
+    # 4. Regex fallback extraction
+    data: Dict[str, Any] = {}
+    f_match = re.search(r'["\']faithfulness["\']\s*:\s*([0-9.]+)', cleaned)
+    if f_match:
+        try:
+            data["faithfulness"] = float(f_match.group(1))
+        except ValueError:
+            pass
+    r_match = re.search(r'["\']answer_relevancy["\']\s*:\s*([0-9.]+)', cleaned)
+    if r_match:
+        try:
+            data["answer_relevancy"] = float(r_match.group(1))
+        except ValueError:
+            pass
+    c_match = re.search(r'["\']context_recall["\']\s*:\s*([0-9.]+)', cleaned)
+    if c_match:
+        try:
+            data["context_recall"] = float(c_match.group(1))
+        except ValueError:
+            pass
+
+    return data
+
+
 def unified_deep_evaluation(
     query: str,
     answer: str,
@@ -408,35 +478,35 @@ def unified_deep_evaluation(
     if not evaluator:
         raise ValueError("No evaluator LLM is available for unified evaluation.")
 
-    # Format the retrieved chunks
+    # Format the retrieved chunks with safe length limits to prevent token explosions
     retrieved_texts = [
-        f"[{idx + 1}] {_chunk_text(c)}" for idx, c in enumerate(retrieved_chunks)
+        f"[{idx + 1}] {_chunk_text(c)[:800]}" for idx, c in enumerate(retrieved_chunks)
     ]
     retrieved_formatted = "\n\n".join(retrieved_texts)
 
-    # Format the candidate chunks
+    # Format candidate chunks with compact previews
     candidate_texts = [
-        f"[{idx + 1}] {_chunk_text(c)}" for idx, c in enumerate(candidate_chunks)
+        f"[{idx + 1}] {_chunk_text(c)[:400]}" for idx, c in enumerate(candidate_chunks)
     ]
     candidate_formatted = "\n\n".join(candidate_texts)
 
     prompt = (
-        "You are an expert RAG system evaluator. Analyze the user query, retrieve chunks, candidate chunks, and generated answer below to perform a unified evaluation.\n\n"
+        "You are an expert RAG system evaluator. Analyze the user query, retrieved chunks, candidate chunks, and generated answer below.\n"
+        "CRITICAL: Output ONLY a single raw JSON object matching the exact schema below. Do NOT output thought processes, reasoning, or markdown fences.\n\n"
         "=== INPUTS ===\n"
         f"User Query: {query}\n\n"
         f"Generated Answer: {answer}\n\n"
         f"Retrieved Chunks (Total: {len(retrieved_chunks)}):\n{retrieved_formatted}\n\n"
         f"Candidate Chunks (Total: {len(candidate_chunks)}):\n{candidate_formatted}\n\n"
         "=== TASK ===\n"
-        "Evaluate the RAG system performance across the following dimensions. You MUST return ONLY a raw JSON object matching the exact schema below.\n"
-        "Return JSON only, do not output markdown formatting like ```json or anything else. Your output must be a parsable JSON string.\n\n"
+        "Evaluate the RAG system performance across the following dimensions. Return JSON ONLY.\n\n"
         "JSON SCHEMA:\n"
         "{\n"
-        "  \"retrieved_relevance\": [list of booleans, one per retrieved chunk, indicating if it is relevant to the query],\n"
-        "  \"candidate_relevance\": [list of booleans, one per candidate chunk, indicating if it is relevant to the query],\n"
-        "  \"faithfulness\": [float 0.0 to 1.0: Rate how faithful the generated answer is to ONLY the retrieved chunks. 1.0 means fully grounded and 0.0 means contains information not in the chunks.],\n"
-        "  \"answer_relevancy\": [float 0.0 to 1.0: Rate how well the generated answer addresses the question. 1.0 means perfectly addresses it, 0.0 means completely irrelevant.],\n"
-        "  \"context_recall\": [float 0.0 to 1.0: Rate if the retrieved chunks fully cover the context required to answer the query. 1.0 means they cover everything, 0.0 means they miss important context.]\n"
+        f"  \"retrieved_relevance\": [list of {len(retrieved_chunks)} booleans, one per retrieved chunk indicating if relevant to query],\n"
+        f"  \"candidate_relevance\": [list of {len(candidate_chunks)} booleans, one per candidate chunk indicating if relevant to query],\n"
+        "  \"faithfulness\": <float 0.0 to 1.0: Rate how faithful the answer is to ONLY the retrieved chunks. 1.0 means fully grounded.>,\n"
+        "  \"answer_relevancy\": <float 0.0 to 1.0: Rate how well the answer addresses the query. 1.0 means perfectly addresses it.>,\n"
+        "  \"context_recall\": <float 0.0 to 1.0: Rate if the retrieved chunks fully cover context needed to answer query. 1.0 means fully covers.>\n"
         "}\n"
     )
 
@@ -458,32 +528,12 @@ def unified_deep_evaluation(
                     logger.error("Evaluator fallback failed: %s", fe)
 
     if not content:
-        raise RuntimeError("Evaluator failed to return content for unified deep evaluation.")
+        logger.warning("Evaluator returned no content for unified evaluation; falling back to heuristics")
+
     logger.debug("unified_deep_evaluation raw content: %r", content[:500])
 
-    # Parse JSON output
-    try:
-        # Strip markdown code block decorators if any (e.g. ```json ... ```)
-        cleaned = re.sub(r"^```(?:json)?\s*", "", content, flags=re.IGNORECASE)
-        cleaned = re.sub(r"\s*```$", "", cleaned).strip()
-        data = json.loads(cleaned)
-    except Exception:
-        # Fallback: try to extract the first JSON object from the response
-        json_match = re.search(r"\{[\s\S]*\}", content)
-        if json_match:
-            try:
-                data = json.loads(json_match.group(0))
-            except Exception as e2:
-                logger.warning(
-                    "Failed to parse JSON from unified evaluator (fallback also failed: %s). Content: %r",
-                    e2, content[:500]
-                )
-                data = {}
-        else:
-            logger.warning(
-                "No JSON object found in unified evaluator response. Content: %r", content[:500]
-            )
-            data = {}
+    # Parse JSON output using resilient parser
+    data = _parse_evaluator_json(content) if content else {}
 
     # Extract & validate lists of booleans
     retrieved_flags = data.get("retrieved_relevance")
@@ -499,7 +549,7 @@ def unified_deep_evaluation(
     candidate_flags = [bool(f) for f in candidate_flags]
 
     # Helper to parse floats safely; returns None when the key is absent or unparseable
-    def get_float(key):
+    def get_float(key: str) -> Optional[float]:
         val = data.get(key)
         if val is None:
             return None
@@ -508,10 +558,43 @@ def unified_deep_evaluation(
         except (TypeError, ValueError):
             return None
 
+    # Compute baseline heuristic metrics to ensure evaluations NEVER return None
+    heuristic_faithfulness = 0.5
+    heuristic_relevancy = 0.5
+    if answer and not answer.startswith("[LLM Error"):
+        ans_terms = _tokenize(answer)
+        if ans_terms:
+            ctx_text = " ".join(_chunk_text(c) for c in retrieved_chunks)
+            ctx_terms = _tokenize(ctx_text)
+            overlap_ctx = len(ans_terms & ctx_terms)
+            heuristic_faithfulness = round(min(1.0, max(0.0, overlap_ctx / max(1, len(ans_terms)))), 3)
+
+        q_terms = _tokenize(query)
+        if q_terms and ans_terms:
+            overlap_q = len(q_terms & ans_terms)
+            heuristic_relevancy = round(min(1.0, max(0.0, overlap_q / max(1, len(q_terms)))), 3)
+
+    relevant_retrieved = sum(1 for f in retrieved_flags if f)
+    relevant_candidates = sum(1 for f in candidate_flags if f)
+    heuristic_recall = (relevant_retrieved / max(1, relevant_candidates)) if relevant_candidates else 1.0
+    heuristic_recall = round(min(1.0, max(0.0, float(heuristic_recall))), 3)
+
+    faith_val = get_float("faithfulness")
+    if faith_val is None:
+        faith_val = heuristic_faithfulness
+
+    rel_val = get_float("answer_relevancy")
+    if rel_val is None:
+        rel_val = heuristic_relevancy
+
+    recall_val = get_float("context_recall")
+    if recall_val is None:
+        recall_val = heuristic_recall
+
     return {
         "retrieved_flags": retrieved_flags,
         "candidate_flags": candidate_flags,
-        "faithfulness": get_float("faithfulness"),
-        "answer_relevancy": get_float("answer_relevancy"),
-        "context_recall": get_float("context_recall"),
+        "faithfulness": faith_val,
+        "answer_relevancy": rel_val,
+        "context_recall": recall_val,
     }

@@ -43,6 +43,9 @@ export default function ConfigCard({ config, onAdd, isStaged, disabled }) {
           <Badge color="blue">{config.chunk_strategy}</Badge>
           <Badge color="ghost">k: {config.top_k}</Badge>
           <Badge color="ghost">thr: {Number(config.threshold).toFixed(2)}</Badge>
+          {config.reranker_enabled && (
+            <Badge color="violet">Reranked</Badge>
+          )}
           {chunkParamEntries.map(([key, val]) => (
             <Badge key={key} color="ghost">
               {key}: {Array.isArray(val) ? `[${val.length}]` : String(val)}
@@ -51,9 +54,17 @@ export default function ConfigCard({ config, onAdd, isStaged, disabled }) {
         </div>
 
         {/* Model info */}
-        <div className="font-mono text-[10px] text-zinc-500 bg-zinc-950/70 p-2 rounded border border-zinc-800/80 truncate">
-          <span className="text-zinc-600 block text-[9px] uppercase">Embedding Model</span>
-          <span className="text-zinc-300">{config.embedding_model}</span>
+        <div className="font-mono text-[10px] text-zinc-500 bg-zinc-950/70 p-2 rounded border border-zinc-800/80 space-y-1">
+          <div className="truncate">
+            <span className="text-zinc-600 block text-[9px] uppercase">Embedding Model</span>
+            <span className="text-zinc-300">{config.embedding_model}</span>
+          </div>
+          {config.reranker_enabled && (
+            <div className="pt-1 border-t border-zinc-800/50 truncate">
+              <span className="text-zinc-600 block text-[9px] uppercase">Reranker</span>
+              <span className="text-violet-400">{config.reranker_model || "bge-reranker"}</span>
+            </div>
+          )}
         </div>
       </div>
 

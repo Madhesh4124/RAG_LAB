@@ -4,23 +4,12 @@ import { Badge, Button } from "../common/index";
 
 const EMBEDDING_MODELS = {
   nvidia: [
-    { value: "nvidia/nemotron-3-embed-1b", label: "nvidia/nemotron-3-embed-1b (Default)" },
-    {
-      value: "nvidia/nemotron-3-embed-1b",
-      label: "nvidia/llama-3.2-nemoretriever-300m-embed-v1",
-    },
+    { value: "nvidia/nemotron-3-embed-1b", label: "nvidia/nemotron-3-embed-1b (Default - 1024-dim)" },
   ],
   huggingface: [
     {
       value: "sentence-transformers/all-MiniLM-L6-v2",
-      label: "sentence-transformers/all-MiniLM-L6-v2",
-    },
-    { value: "BAAI/bge-base-en-v1.5", label: "BAAI/bge-base-en-v1.5" },
-    { value: "intfloat/e5-base-v2", label: "intfloat/e5-base-v2" },
-    { value: "thenlper/gte-base", label: "thenlper/gte-base" },
-    {
-      value: "sentence-transformers/multi-qa-mpnet-base-dot-v1",
-      label: "sentence-transformers/multi-qa-mpnet-base-dot-v1",
+      label: "sentence-transformers/all-MiniLM-L6-v2 (Default - 384-dim)",
     },
   ],
 };
@@ -63,9 +52,16 @@ export default function ConfigFormModal({ onSave, onCancel, existingNames = [], 
   const [embeddingModel, setEmbeddingModel] = useState(EMBEDDING_MODELS.nvidia[0].value);
   const [topK, setTopK] = useState(5);
   const [threshold, setThreshold] = useState(0.5);
+  const [rerankerEnabled, setRerankerEnabled] = useState(false);
+  const [rerankerModel, setRerankerModel] = useState("BAAI/bge-reranker-v2-m3");
   const [error, setError] = useState("");
 
   const normalizedName = useMemo(() => name.trim(), [name]);
+
+  const availableEmbeddingModels = EMBEDDING_MODELS[embeddingProvider] || EMBEDDING_MODELS.nvidia;
+  const activeEmbeddingModel = availableEmbeddingModels.some((m) => m.value === embeddingModel)
+    ? embeddingModel
+    : availableEmbeddingModels[0].value;
 
   const handleSubmit = () => {
     const trimmed = normalizedName;
@@ -83,9 +79,11 @@ export default function ConfigFormModal({ onSave, onCancel, existingNames = [], 
       chunk_strategy: chunkStrategy,
       chunk_params: chunkParams,
       embedding_provider: embeddingProvider,
-      embedding_model: embeddingModel,
+      embedding_model: activeEmbeddingModel,
       top_k: Number(topK),
       threshold: Number(threshold),
+      reranker_enabled: Boolean(rerankerEnabled),
+      reranker_model: rerankerEnabled ? rerankerModel : undefined,
       isPreset: false,
       indexingStatus: "indexing",
     });
@@ -307,7 +305,7 @@ export default function ConfigFormModal({ onSave, onCancel, existingNames = [], 
               onChange={(e) => {
                 const provider = e.target.value;
                 setEmbeddingProvider(provider);
-                setEmbeddingModel(EMBEDDING_MODELS[provider][0].value);
+                setEmbeddingModel(EMBEDDING_MODELS[provider]?.[0]?.value || "");
               }}
               disabled={isDisabled}
               className="w-full rounded-xl border border-white/10 bg-surface-2 px-3.5 py-2.5 text-sm text-white focus:border-accent-violet focus:ring-1 focus:ring-accent-violet outline-none transition-all"
@@ -320,12 +318,12 @@ export default function ConfigFormModal({ onSave, onCancel, existingNames = [], 
           <label className="block space-y-1.5">
             <span className="text-xs font-semibold uppercase tracking-wider text-[#ADACA7]">Embedding Model</span>
             <select
-              value={embeddingModel}
+              value={activeEmbeddingModel}
               onChange={(e) => setEmbeddingModel(e.target.value)}
               disabled={isDisabled}
               className="w-full rounded-xl border border-white/10 bg-surface-2 px-3.5 py-2.5 text-sm text-white focus:border-accent-violet focus:ring-1 focus:ring-accent-violet outline-none transition-all"
             >
-              {EMBEDDING_MODELS[embeddingProvider].map((model) => (
+              {availableEmbeddingModels.map((model) => (
                 <option key={model.value} value={model.value} className="bg-surface-2 text-white">{model.label}</option>
               ))}
             </select>
@@ -363,6 +361,43 @@ export default function ConfigFormModal({ onSave, onCancel, existingNames = [], 
               disabled={isDisabled}
               className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer accent-accent-violet"
             />
+          </div>
+
+          {/* Reranker section */}
+          <div className="space-y-3 p-3.5 rounded-xl bg-surface-2/60 border border-white/[0.07]">
+            <label className="flex items-center justify-between cursor-pointer">
+              <div>
+                <span className="text-xs font-semibold uppercase tracking-wider text-[#ADACA7] block">
+                  Enable Reranker
+                </span>
+                <span className="text-[11px] text-zinc-400">Re-scores candidates using cross-attention</span>
+              </div>
+              <input
+                type="checkbox"
+                checked={rerankerEnabled}
+                onChange={(e) => setRerankerEnabled(e.target.checked)}
+                disabled={isDisabled}
+                className="h-4 w-4 rounded border-white/20 accent-accent-violet cursor-pointer"
+              />
+            </label>
+            {rerankerEnabled && (
+              <div className="space-y-1.5 pt-2.5 border-t border-white/[0.08]">
+                <span className="text-[11px] font-medium text-white/70 block">Reranker Model</span>
+                <select
+                  value={rerankerModel}
+                  onChange={(e) => setRerankerModel(e.target.value)}
+                  disabled={isDisabled}
+                  className="w-full rounded-xl border border-white/10 bg-surface-2 px-3 py-2 text-xs text-white focus:border-accent-violet focus:ring-1 focus:ring-accent-violet outline-none transition-all"
+                >
+                  <option value="BAAI/bge-reranker-v2-m3" className="bg-surface-2 text-white">
+                    BAAI/bge-reranker-v2-m3 (Hosted API - Best Quality)
+                  </option>
+                  <option value="BAAI/bge-reranker-base" className="bg-surface-2 text-white">
+                    BAAI/bge-reranker-base (Hosted API - Fast)
+                  </option>
+                </select>
+              </div>
+            )}
           </div>
         </div>
 

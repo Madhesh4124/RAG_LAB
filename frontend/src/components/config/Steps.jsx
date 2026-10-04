@@ -4,14 +4,9 @@ const EMBEDDING_MODELS = {
     { value: "nvidia/nemotron-3-embed-1b", label: "nvidia/nemotron-3-embed-1b (Default - 1024-dim)" },
   ],
   huggingface: [
-    { value: "BAAI/bge-base-en-v1.5", label: "BAAI/bge-base-en-v1.5 (High Quality - 768-dim)" },
     {
       value: "sentence-transformers/all-MiniLM-L6-v2",
-      label: "sentence-transformers/all-MiniLM-L6-v2 (Fast - 384-dim)",
-    },
-    {
-      value: "sentence-transformers/multi-qa-mpnet-base-dot-v1",
-      label: "sentence-transformers/multi-qa-mpnet-base-dot-v1 (QA Optimized)",
+      label: "sentence-transformers/all-MiniLM-L6-v2 (Default - 384-dim)",
     },
   ],
 };
@@ -190,11 +185,11 @@ export function RetrievalStep({ config, onChange }) {
             <div className="space-y-2 pl-6">
               <label className="text-xs font-semibold text-white/70">Reranker Model (Hosted)</label>
               <select
-                value={config.reranker_model || "BAAI/bge-reranker-base"}
+                value={config.reranker_model || "BAAI/bge-reranker-v2-m3"}
                 onChange={(e) => onChange({ reranker_provider: "huggingface_api", reranker_model: e.target.value })}
                 className="w-full rounded-xl border border-white/10 bg-surface-2 px-3 py-2 text-sm text-white focus:border-accent-violet outline-none"
               >
-                <option value="BAAI/bge-reranker-large" className="bg-surface-2 text-white">BAAI/bge-reranker-large (Best quality)</option>
+                <option value="BAAI/bge-reranker-v2-m3" className="bg-surface-2 text-white">BAAI/bge-reranker-v2-m3 (Best quality)</option>
                 <option value="BAAI/bge-reranker-base" className="bg-surface-2 text-white">BAAI/bge-reranker-base (Accurate)</option>
               </select>
             </div>

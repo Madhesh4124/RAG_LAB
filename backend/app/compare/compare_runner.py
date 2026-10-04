@@ -302,10 +302,11 @@ async def run_single_config(
             chunk_details=chunk_details,
         )
 
+    fetch_k = max(config.top_k * 2, 6) if getattr(config, "reranker_enabled", False) else config.top_k
     raw_results = await asyncio.to_thread(
         vectorstore.similarity_search_with_score,
         query,
-        config.top_k,
+        fetch_k,
     )
 
     normalized_results: List[Tuple] = [
@@ -316,7 +317,42 @@ async def run_single_config(
     # If thresholding removes everything, keep top retrieved chunks so the
     # comparison still has context to answer from.
     if not filtered_results and normalized_results:
-        filtered_results = sorted(normalized_results, key=lambda item: float(item[1]), reverse=True)[: config.top_k]
+        filtered_results = sorted(normalized_results, key=lambda item: float(item[1]), reverse=True)[: fetch_k]
+
+    if getattr(config, "reranker_enabled", False) and filtered_results:
+        try:
+            from app.services.retrieval.reranker import get_reranker
+            from app.services.chunking.base import Chunk
+            import uuid
+            reranker = get_reranker({
+                "type": "reranker",
+                "provider": getattr(config, "reranker_provider", "huggingface_api") or "huggingface_api",
+                "model": getattr(config, "reranker_model", "BAAI/bge-reranker-v2-m3") or "BAAI/bge-reranker-v2-m3",
+            })
+            if reranker:
+                chunk_tuples = []
+                for doc, score in filtered_results:
+                    meta = getattr(doc, "metadata", {}) or {}
+                    cid = meta.get("chunk_id", str(uuid.uuid4()))
+                    text = _extract_text(doc)
+                    chunk_obj = Chunk(id=cid, text=text, metadata=meta)
+                    chunk_tuples.append((chunk_obj, float(score)))
+
+                reranked = reranker.rerank(query, chunk_tuples, top_k=config.top_k)
+                if reranked:
+                    reranked_docs = []
+                    for chunk_obj, r_score in reranked:
+                        match_doc = next((d for d, _ in filtered_results if _extract_text(d) == chunk_obj.text), None)
+                        if match_doc:
+                            reranked_docs.append((match_doc, r_score))
+                    if reranked_docs:
+                        filtered_results = reranked_docs
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning("Compare reranking failed; using vector similarity: %s", e)
+            filtered_results = filtered_results[: config.top_k]
+    else:
+        filtered_results = filtered_results[: config.top_k]
 
     chunks = [_extract_text(doc) for doc, _ in filtered_results]
     scores = [round(float(score), 4) for _, score in filtered_results]

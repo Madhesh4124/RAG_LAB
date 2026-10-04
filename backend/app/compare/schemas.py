@@ -80,8 +80,15 @@ class ConfigResult(BaseModel):
 class CompareRequest(BaseModel):
     query: str
     configs: List[RAGConfig] = Field(..., min_length=1, max_length=4)
+    include_evaluation: bool = False
+
+
+class EvaluateCompareRequest(BaseModel):
+    query: str
+    results: List[ConfigResult] = Field(..., min_length=1, max_length=4)
 
 
 class CompareResponse(BaseModel):
     query: str
     results: List[ConfigResult]
+

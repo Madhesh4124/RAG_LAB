@@ -73,6 +73,7 @@ export const clearChromaRoot = (rootPath = null) =>
 
 // ── Compare ─────────────────────────────────────────────────────
 export const compareConfigs = (payload) => api.post("/compare/run", payload);
+export const compareEvaluate = (payload) => api.post("/compare/evaluate", payload);
 export const compareIndex = (payload) => api.post("/compare/index", payload);
 export const clearChromaDb = () => api.post("/compare/clear-chromadb");
 export const scoreMessage = (messageId) => api.post("/api/evaluation/score", { message_id: messageId });

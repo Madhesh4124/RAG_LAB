@@ -62,6 +62,29 @@ def _content_to_text(content: Any) -> str:
     return str(content)
 
 
+def _clean_answer_text(text: str) -> str:
+    import re
+    cleaned = str(text or "").strip()
+    cleaned = re.sub(r"<think>[\s\S]*?</think>", "", cleaned, flags=re.IGNORECASE).strip()
+    if "Here's a thinking process:" in cleaned or "Here is a thinking process:" in cleaned:
+        m = re.search(
+            r"(?:(?:Therefore|In summary|In conclusion|To answer your question|Final Answer:?|Answer:?|Conclusion:?)\s*[:\n]+)([\s\S]+)$",
+            cleaned,
+            re.IGNORECASE,
+        )
+        if m and len(m.group(1).strip()) > 10:
+            return m.group(1).strip()
+        sections = re.split(r"\n\s*(?:---\s*\n|\*{3,}\s*\n|\b(?:Final Answer|Answer)\b:?)", cleaned, flags=re.IGNORECASE)
+        if len(sections) > 1 and len(sections[-1].strip()) > 10:
+            return sections[-1].strip()
+        paragraphs = [p.strip() for p in cleaned.split("\n\n") if p.strip()]
+        if paragraphs:
+            last_p = paragraphs[-1]
+            if not last_p.lower().startswith(("here's a thinking", "1.", "2.", "3.", "4.", "5.", "- ", "* ")):
+                return last_p
+    return cleaned
+
+
 class NvidiaClient:
     """NVIDIA NIM LLM Client using LangChain's ChatNVIDIA."""
 
@@ -105,10 +128,9 @@ class NvidiaClient:
             try:
                 from langchain_nvidia_ai_endpoints import ChatNVIDIA
 
-                model_kwargs = {}
+                model_kwargs = {"chat_template_kwargs": {"enable_thinking": enable_thinking_env}}
                 if enable_thinking_env:
                     model_kwargs["reasoning_budget"] = self.reasoning_budget
-                    model_kwargs["chat_template_kwargs"] = {"enable_thinking": True}
 
                 self.llm = ChatNVIDIA(
                     model=self.model_name,
@@ -148,7 +170,7 @@ class NvidiaClient:
 
         messages = self._build_prompt(query, chunks)
         response = self.llm.invoke(messages)
-        text = _content_to_text(getattr(response, "content", "")).strip()
+        text = _clean_answer_text(_content_to_text(getattr(response, "content", "")))
         return text or "I could not generate a grounded answer from the provided context."
 
     async def generate_async(self, query: str, chunks: List[Chunk], memory: Any = None) -> str:
@@ -163,7 +185,7 @@ class NvidiaClient:
             response = await asyncio.wait_for(
                 asyncio.to_thread(self.llm.invoke, messages), timeout=30.0
             )
-        text = _content_to_text(getattr(response, "content", "")).strip()
+        text = _clean_answer_text(_content_to_text(getattr(response, "content", "")))
         return text or "I could not generate a grounded answer from the provided context."
 
     def generate_stream(self, query: str, chunks: List[Chunk]):

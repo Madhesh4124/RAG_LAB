@@ -464,7 +464,12 @@ export default function ComparePage() {
       />
 
       <div ref={resultsRef}>
-        <ResultsGrid results={results} isLoading={isLoading} />
+        <ResultsGrid
+          results={results}
+          isLoading={isLoading}
+          query={query}
+          onUpdateResults={setResults}
+        />
       </div>
 
       {showConfigModal && (

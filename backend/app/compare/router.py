@@ -8,9 +8,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.compare.collection_registry import collection_exists, clear_compare_chroma_store
-from app.compare.compare_runner import run_comparison
+from app.compare.compare_runner import run_comparison, evaluate_comparison_results
 from app.compare.indexer import index_config
-from app.compare.schemas import CompareRequest, CompareResponse, IndexRequest, IndexResponse
+from app.compare.schemas import CompareRequest, CompareResponse, IndexRequest, IndexResponse, EvaluateCompareRequest
 from app.auth import get_current_user
 from app.database import get_db
 from app.models.document import Document
@@ -131,9 +131,25 @@ async def run_compare(
                 detail=f"Config '{config.collection_name}' has not been indexed yet. Call /compare/index first.",
             )
 
-    results = await run_comparison(query=request.query, configs=request.configs, user_scope=str(current_user.id), db=db)
+    results = await run_comparison(
+        query=request.query,
+        configs=request.configs,
+        user_scope=str(current_user.id),
+        db=db,
+        include_evaluation=request.include_evaluation,
+    )
     await db.commit()
     return CompareResponse(query=request.query, results=results)
+
+
+@router.post("/evaluate", response_model=CompareResponse)
+async def evaluate_compare(
+    request: EvaluateCompareRequest,
+    current_user: User = Depends(get_current_user),
+) -> CompareResponse:
+    """Run deep LLM evaluation on-demand when the Evaluation tab is opened."""
+    updated_results = await evaluate_comparison_results(query=request.query, results=request.results)
+    return CompareResponse(query=request.query, results=updated_results)
 
 
 @router.post("/clear-chromadb")

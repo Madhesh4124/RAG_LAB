@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React from "react";
 import { BrowserRouter, Navigate, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import Setup from "./pages/Setup";
 import Preview from "./pages/Preview";
@@ -11,6 +11,7 @@ import PasswordReset from "./pages/PasswordReset";
 import ModeSelect from "./pages/ModeSelect";
 import { useAuth } from "./hooks/useAuth";
 import { SessionProvider } from "./hooks/useSession";
+import ErrorBoundary from "./components/common/ErrorBoundary";
 import {
   IconHome,
   IconAdminShield,
@@ -152,19 +153,21 @@ export default function App() {
         <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col">
           <TopNav />
           <main className="flex-1">
-            <Routes>
-              <Route path="/"               element={<Navigate to="/login" replace />} />
-              <Route path="/login"          element={<Login />} />
-              <Route path="/password-reset" element={<PasswordReset />} />
-              <Route path="/mode-select"    element={<ProtectedRoute><ModeSelect /></ProtectedRoute>} />
-              <Route path="/setup"          element={<ProtectedRoute><Setup /></ProtectedRoute>} />
-              <Route path="/preview"        element={<ProtectedRoute><Preview /></ProtectedRoute>} />
-              <Route path="/compare"        element={<ProtectedRoute><Compare /></ProtectedRoute>} />
-              <Route path="/chat"           element={<ProtectedRoute><QuickChat /></ProtectedRoute>} />
-              <Route path="/custom-chat"    element={<ProtectedRoute><Chat /></ProtectedRoute>} />
-              <Route path="/admin"          element={<AdminRoute><Admin /></AdminRoute>} />
-              <Route path="*"               element={<Navigate to="/login" replace />} />
-            </Routes>
+            <ErrorBoundary>
+              <Routes>
+                <Route path="/"               element={<Navigate to="/login" replace />} />
+                <Route path="/login"          element={<Login />} />
+                <Route path="/password-reset" element={<PasswordReset />} />
+                <Route path="/mode-select"    element={<ProtectedRoute><ModeSelect /></ProtectedRoute>} />
+                <Route path="/setup"          element={<ProtectedRoute><Setup /></ProtectedRoute>} />
+                <Route path="/preview"        element={<ProtectedRoute><Preview /></ProtectedRoute>} />
+                <Route path="/compare"        element={<ProtectedRoute><Compare /></ProtectedRoute>} />
+                <Route path="/chat"           element={<ProtectedRoute><QuickChat /></ProtectedRoute>} />
+                <Route path="/custom-chat"    element={<ProtectedRoute><Chat /></ProtectedRoute>} />
+                <Route path="/admin"          element={<AdminRoute><Admin /></AdminRoute>} />
+                <Route path="*"               element={<Navigate to="/login" replace />} />
+              </Routes>
+            </ErrorBoundary>
           </main>
         </div>
       </SessionProvider>

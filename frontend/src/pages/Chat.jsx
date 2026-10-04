@@ -1,6 +1,7 @@
 import React from 'react';
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
+import { useSession } from "../hooks/useSession";
 import ChatInterface from "../components/chat/ChatInterface";
 import { Button, Badge } from "../components/common/index";
 import { getIndexStatus, prepareChatSession } from "../services/api";

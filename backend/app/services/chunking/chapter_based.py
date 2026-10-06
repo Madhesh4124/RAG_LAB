@@ -259,7 +259,7 @@ class ChapterChunker(BaseChunker):
         if not current_lines:
             return
 
-        section_text = "".join(line for line, _, _ in current_lines)
+        section_text = "".join(item[0] for item in current_lines)
         section_start = current_lines[0][1]
         start_line_num = current_lines[0][3] if len(current_lines[0]) > 3 else None
         md = self._build_metadata(metadata, heading, heading_level, section_index, start_line_num)

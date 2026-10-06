@@ -18,9 +18,6 @@ class RAGConfig(BaseModel):
     top_k: int = Field(..., ge=1, le=10)
     threshold: float = Field(..., ge=0.0, le=1.0)
     collection_name: str = ""
-    reranker_enabled: bool = False
-    reranker_model: Optional[str] = "BAAI/bge-reranker-v2-m3"
-    reranker_provider: Optional[str] = "huggingface_api"
 
     @model_validator(mode="after")
     def _populate_collection_name(self):

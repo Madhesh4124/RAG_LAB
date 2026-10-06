@@ -158,6 +158,7 @@ export default function App() {
                 <Route path="/"               element={<Navigate to="/login" replace />} />
                 <Route path="/login"          element={<Login />} />
                 <Route path="/password-reset" element={<PasswordReset />} />
+                <Route path="/reset-password" element={<PasswordReset />} />
                 <Route path="/mode-select"    element={<ProtectedRoute><ModeSelect /></ProtectedRoute>} />
                 <Route path="/setup"          element={<ProtectedRoute><Setup /></ProtectedRoute>} />
                 <Route path="/preview"        element={<ProtectedRoute><Preview /></ProtectedRoute>} />

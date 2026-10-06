@@ -1,4 +1,4 @@
-"""Email service for password resets and API error alerts via Resend or SMTP."""
+"""Email service for password resets and API error alerts via Brevo or SMTP."""
 
 import os
 import logging
@@ -12,12 +12,16 @@ logger = logging.getLogger(__name__)
 
 
 class EmailService:
-    """Send emails via Resend HTTPS API (preferred for cloud hosting) or SMTP."""
+    """Send emails via Brevo HTTPS REST API (preferred for cloud hosting) or SMTP."""
 
     def __init__(self):
-        # Resend API configuration (HTTPS - works on Hugging Face Spaces, Render, Vercel, etc.)
-        self.resend_api_key = os.getenv("RESEND_API_KEY", "").strip()
-        self.resend_from_email = os.getenv("RESEND_FROM_EMAIL", "RAG Lab <onboarding@resend.dev>").strip()
+        # Brevo API configuration (HTTPS - works on Hugging Face Spaces, Render, Vercel, etc.)
+        self.brevo_api_key = os.getenv("BREVO_API_KEY", "").strip()
+        self.brevo_sender_email = os.getenv(
+            "BREVO_SENDER_EMAIL",
+            os.getenv("SMTP_SENDER_EMAIL", "madhesh4124@gmail.com")
+        ).strip()
+        self.brevo_sender_name = os.getenv("BREVO_SENDER_NAME", "RAG Lab").strip()
 
         # SMTP configuration (fallback for local dev)
         self.smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
@@ -26,7 +30,7 @@ class EmailService:
         self.sender_password = os.getenv("SMTP_SENDER_PASSWORD", "")
         self.admin_email = os.getenv("ADMIN_EMAIL", "")
 
-        self.enabled = bool(self.resend_api_key or (self.sender_email and self.sender_password))
+        self.enabled = bool(self.brevo_api_key or (self.sender_email and self.sender_password))
 
     def send_password_reset_email(self, recipient_email: str, reset_token: str, reset_url: Optional[str] = None) -> bool:
         """Send password reset email with token."""
@@ -38,7 +42,7 @@ class EmailService:
         logger.info("[AUTH] Password reset requested for %s. Reset link: %s", recipient_email, reset_url)
 
         if not self.enabled:
-            logger.warning("Email service disabled (no RESEND_API_KEY or SMTP credentials). Link logged above.")
+            logger.warning("Email service disabled (no BREVO_API_KEY or SMTP credentials). Link logged above.")
             return False
 
         subject = "RAG Lab - Password Reset Request"
@@ -96,41 +100,47 @@ class EmailService:
             return False
 
     def _send_email(self, recipient: str, subject: str, html_body: str) -> bool:
-        """Internal method to send email via Resend HTTPS API (preferred) or SMTP."""
-        if self.resend_api_key:
-            return self._send_via_resend(recipient, subject, html_body)
+        """Internal method to send email via Brevo HTTPS REST API (preferred) or SMTP."""
+        if self.brevo_api_key:
+            return self._send_via_brevo(recipient, subject, html_body)
         return self._send_via_smtp(recipient, subject, html_body)
 
-    def _send_via_resend(self, recipient: str, subject: str, html_body: str) -> bool:
+    def _send_via_brevo(self, recipient: str, subject: str, html_body: str) -> bool:
         try:
             with httpx.Client(timeout=10.0) as client:
                 res = client.post(
-                    "https://api.resend.com/emails",
+                    "https://api.brevo.com/v3/smtp/email",
                     headers={
-                        "Authorization": f"Bearer {self.resend_api_key}",
+                        "api-key": self.brevo_api_key,
                         "Content-Type": "application/json",
+                        "Accept": "application/json",
                     },
                     json={
-                        "from": self.resend_from_email,
-                        "to": [recipient],
+                        "sender": {
+                            "name": self.brevo_sender_name,
+                            "email": self.brevo_sender_email,
+                        },
+                        "to": [
+                            {"email": recipient}
+                        ],
                         "subject": subject,
-                        "html": html_body,
+                        "htmlContent": html_body,
                     },
                 )
                 if res.status_code in (200, 201):
-                    email_id = res.json().get("id", "ok")
-                    logger.info("Email sent successfully to %s via Resend API (id: %s)", recipient, email_id)
+                    msg_id = res.json().get("messageId", "ok")
+                    logger.info("Email sent successfully to %s via Brevo API (id: %s)", recipient, msg_id)
                     return True
                 else:
                     logger.error(
-                        "Resend API error sending email to %s (HTTP %s): %s",
+                        "Brevo API error sending email to %s (HTTP %s): %s",
                         recipient,
                         res.status_code,
                         res.text,
                     )
                     return False
         except Exception as exc:
-            logger.error("Error connecting to Resend API for %s: %s", recipient, exc)
+            logger.error("Error connecting to Brevo API for %s: %s", recipient, exc)
             return False
 
     def _send_via_smtp(self, recipient: str, subject: str, html_body: str) -> bool:

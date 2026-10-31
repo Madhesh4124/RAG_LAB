@@ -51,7 +51,7 @@ RAG Lab features three core workspaces accessible from the **Mode Selection** da
 1. **⚡ Quick Chat (`/chat`)**: Rapid document Q&A. Upload single or multi-document sets, automatically initialize best-preset embeddings, and stream responses token-by-token with real-time SSE, interactive citation cards, and session history.
 2. **🛠️ Custom Pipeline Architect (`/setup`)**: 5-step wizard to configure and fine-tune every layer:
    - **Chunking**: Fixed-size, Recursive Character, Semantic, Regex, and Sentence-Window (with window expansion).
-   - **Embedding**: NVIDIA (`nvidia/nemotron-3-embed-1b`), Hugging Face (`all-MiniLM-L6-v2`), or Google Gemini.
+   - **Embedding**: Google Gemini (`models/gemini-embedding-001`, 3072-dim), NVIDIA (`nvidia/nemotron-3-embed-1b`, 1024-dim), or Hugging Face (`all-MiniLM-L6-v2`, 384-dim with zero-cost local CPU fallback).
    - **Vector Store & Hybrid Retrieval**: ChromaDB with cosine distance + Rank-BM25 sparse retriever with tunable $\alpha$ fusion weight.
    - **Rerankers**: BAAI BGE-Reranker-v2-m3 via Hugging Face API or local cross-encoders.
    - **Generation**: NVIDIA Nemotron-3.5, Gemini 2.5 Flash, or Groq with customizable temperature and max turns.

@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, Response, status, BackgroundTasks
+import os
+from urllib.parse import urlparse
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status, BackgroundTasks
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -83,6 +85,7 @@ async def me(current_user: User = Depends(get_current_user)):
 @router.post("/password-reset/request", status_code=status.HTTP_200_OK)
 async def request_password_reset(
     payload: PasswordResetRequestBody,
+    request: Request,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
@@ -92,7 +95,31 @@ async def request_password_reset(
 
     if user:
         reset_token = create_password_reset_token(user.id)
-        background_tasks.add_task(email_service.send_password_reset_email, user.email, reset_token)
+        # Resolve frontend base URL dynamically from request headers or environment
+        origin = request.headers.get("origin")
+        if not origin and request.headers.get("referer"):
+            parsed = urlparse(request.headers.get("referer"))
+            if parsed.scheme and parsed.netloc:
+                origin = f"{parsed.scheme}://{parsed.netloc}"
+
+        env_frontend = os.getenv("FRONTEND_URL", "").strip().rstrip("/")
+        space_host = os.getenv("SPACE_HOST")
+        hf_default = f"https://{space_host}" if space_host else None
+
+        # Prefer non-localhost FRONTEND_URL if explicitly configured, else Origin header from caller
+        if env_frontend and "localhost" not in env_frontend:
+            base_url = env_frontend
+        elif origin:
+            base_url = origin.rstrip("/")
+        elif env_frontend:
+            base_url = env_frontend
+        elif hf_default:
+            base_url = hf_default
+        else:
+            base_url = "http://localhost:5173"
+
+        reset_url = f"{base_url}/reset-password?token={reset_token}"
+        background_tasks.add_task(email_service.send_password_reset_email, user.email, reset_token, reset_url=reset_url)
 
     # Always return success to prevent email enumeration attacks
     return PasswordResetResponse(

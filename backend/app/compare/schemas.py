@@ -30,7 +30,7 @@ class RAGConfig(BaseModel):
         default_model_by_provider = {
             "nvidia": "nvidia/nemotron-3-embed-1b",
             "huggingface": "sentence-transformers/all-MiniLM-L6-v2",
-            "google": "models/gemini-embedding-2-preview",
+            "google": "models/gemini-embedding-001",
         }
 
         # Backward compatibility for old payloads that sent provider in embedding_model.

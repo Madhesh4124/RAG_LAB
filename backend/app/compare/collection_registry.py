@@ -107,6 +107,10 @@ def _load_embedder(embedding_provider: str, embedding_model: str):
             embedder = _EmbeddingAdapter(HuggingFaceEmbeddings(model_name=model_name))
         except Exception:
             embedder = _EmbeddingAdapter(HuggingFaceAPIEmbedder(model=model_name))
+    elif embedding_provider == "google":
+        from app.services.embedding.gemini_embedder import GeminiEmbedder
+        model_name = embedding_model or "models/gemini-embedding-001"
+        embedder = _EmbeddingAdapter(GeminiEmbedder(model=model_name))
     else:
         raise ValueError(f"Unsupported embedding provider: {embedding_provider}")
 

@@ -3,16 +3,20 @@ const EMBEDDING_MODELS = {
   nvidia: [
     { value: "nvidia/nemotron-3-embed-1b", label: "nvidia/nemotron-3-embed-1b (Default - 1024-dim)" },
   ],
+  google: [
+    { value: "models/gemini-embedding-001", label: "gemini-embedding-001 (Google API - 3072-dim)" },
+    { value: "models/gemini-embedding-2-preview", label: "gemini-embedding-2-preview (Google API - 3072-dim)" },
+  ],
   huggingface: [
     {
       value: "sentence-transformers/all-MiniLM-L6-v2",
-      label: "sentence-transformers/all-MiniLM-L6-v2 (Default - 384-dim)",
+      label: "sentence-transformers/all-MiniLM-L6-v2 (Local - 384-dim)",
     },
   ],
 };
 
 export function EmbeddingStep({ config, onChange }) {
-  const selectedProvider = config.provider === "huggingface" ? "huggingface" : "nvidia";
+  const selectedProvider = ["nvidia", "google", "huggingface"].includes(config.provider) ? config.provider : "nvidia";
   const providerModels = EMBEDDING_MODELS[selectedProvider];
   const selectedModel =
     providerModels.find((m) => m.value === config.model)?.value || providerModels[0].value;
@@ -40,7 +44,8 @@ export function EmbeddingStep({ config, onChange }) {
             className="w-full rounded-xl border border-white/10 bg-surface-2 px-3.5 py-2.5 text-sm text-white focus:border-accent-violet focus:ring-1 focus:ring-accent-violet outline-none transition-all"
           >
             <option value="nvidia" className="bg-surface-2 text-white">NVIDIA NIM</option>
-            <option value="huggingface" className="bg-surface-2 text-white">Hugging Face</option>
+            <option value="google" className="bg-surface-2 text-white">Google Gemini</option>
+            <option value="huggingface" className="bg-surface-2 text-white">Hugging Face (Local)</option>
           </select>
         </div>
 

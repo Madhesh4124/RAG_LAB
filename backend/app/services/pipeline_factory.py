@@ -130,7 +130,8 @@ class PipelineFactory:
 
         try:
             if provider == "google":
-                raise PipelineConfigError("Unknown embedding provider: google")
+                from app.services.embedding.gemini_embedder import GeminiEmbedder
+                return GeminiEmbedder(**kwargs)
             elif provider == "nvidia":
                 from app.services.embedding.nvidia_embedder import NvidiaEmbedder
                 raw_model = kwargs.get("model")

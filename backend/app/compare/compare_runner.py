@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 _LLM_CACHE: dict[tuple, Any] = {}
 _LLM_CACHE_LOCK = threading.Lock()
+_DB_LOCK = asyncio.Lock()
 
 
 def _clean_answer_text(text: str) -> str:
@@ -130,11 +131,12 @@ async def _summarize_compare_context(
 ) -> tuple[str | None, List[Tuple], List[str]]:
     summary_key = derive_config_signature(config, user_scope=user_scope)
     if db is not None and user_scope is not None:
-        cached_summary = await get_compare_summary(
-            db=db,
-            user_id=uuid.UUID(user_scope),
-            config_signature=summary_key,
-        )
+        async with _DB_LOCK:
+            cached_summary = await get_compare_summary(
+                db=db,
+                user_id=uuid.UUID(user_scope),
+                config_signature=summary_key,
+            )
         if cached_summary:
             return cached_summary, [], []
 
@@ -160,12 +162,13 @@ async def _summarize_compare_context(
     ]
     summary = await SummaryService.generate_doc_summary(fallback_chunks, _LLMWrapper(llm)) if fallback_chunks else None
     if summary and db is not None and user_scope is not None:
-        await upsert_compare_summary(
-            db=db,
-            user_id=uuid.UUID(user_scope),
-            config_signature=summary_key,
-            summary=summary,
-        )
+        async with _DB_LOCK:
+            await upsert_compare_summary(
+                db=db,
+                user_id=uuid.UUID(user_scope),
+                config_signature=summary_key,
+                summary=summary,
+            )
     return summary, fallback_results, fallback_chunks
 
 

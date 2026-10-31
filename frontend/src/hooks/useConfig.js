@@ -37,7 +37,8 @@ const DEFAULTS = {
 const PRESETS = {
   fast:     { ...DEFAULTS, chunker: { ...CHUNKER_DEFAULTS.fixed_size, chunk_size: 256, overlap: 20 }, retriever: { type: "hybrid", retrieval_type: "hybrid", top_k: 3, similarity_threshold: 0.0, alpha: 0.7, lambda_mult: 0.5, reranker_enabled: false, reranker_provider: "huggingface_api", reranker_model: "BAAI/bge-reranker-base" } },
   balanced: { ...DEFAULTS },
-  accurate: { ...DEFAULTS, chunker: { ...CHUNKER_DEFAULTS.semantic, max_chunk_size: 1024, similarity_threshold: 0.7, overlap_sentences: 1 }, embedder: { provider: "nvidia", model: "nvidia/nemotron-3-embed-1b" }, retriever: { type: "hybrid", retrieval_type: "hybrid", top_k: 7, similarity_threshold: 0.0, alpha: 0.7, lambda_mult: 0.5, reranker_enabled: true, reranker_provider: "huggingface_api", reranker_model: "BAAI/bge-reranker-base" } },
+  accurate: { ...DEFAULTS, chunker: { ...CHUNKER_DEFAULTS.semantic, max_chunk_size: 1024, similarity_threshold: 0.7, overlap_sentences: 1 }, embedder: { provider: "google", model: "models/gemini-embedding-001" }, retriever: { type: "hybrid", retrieval_type: "hybrid", top_k: 7, similarity_threshold: 0.0, alpha: 0.7, lambda_mult: 0.5, reranker_enabled: true, reranker_provider: "huggingface_api", reranker_model: "BAAI/bge-reranker-base" } },
+  gemini:   { ...DEFAULTS, embedder: { provider: "google", model: "models/gemini-embedding-001" }, retriever: { type: "hybrid", retrieval_type: "hybrid", top_k: 5, similarity_threshold: 0.0, alpha: 0.7, lambda_mult: 0.5, reranker_enabled: false, reranker_provider: "huggingface_api", reranker_model: "BAAI/bge-reranker-base" } },
   recursive: { ...DEFAULTS, chunker: { ...CHUNKER_DEFAULTS.recursive }, retriever: { type: "hybrid", retrieval_type: "hybrid", top_k: 5, similarity_threshold: 0.0, alpha: 0.7, lambda_mult: 0.5, reranker_enabled: false, reranker_provider: "huggingface_api", reranker_model: "BAAI/bge-reranker-base" } },
   chapter: { ...DEFAULTS, chunker: { ...CHUNKER_DEFAULTS.chapter_based }, retriever: { type: "hybrid", retrieval_type: "hybrid", top_k: 5, similarity_threshold: 0.0, alpha: 0.7, lambda_mult: 0.5, reranker_enabled: false, reranker_provider: "huggingface_api", reranker_model: "BAAI/bge-reranker-base" } },
   sentence_window: { ...DEFAULTS, chunker: { ...CHUNKER_DEFAULTS.sentence_window }, retriever: { type: "dense", retrieval_type: "dense", top_k: 5, similarity_threshold: 0.0, alpha: 0.7, lambda_mult: 0.5, reranker_enabled: false, reranker_provider: "huggingface_api", reranker_model: "BAAI/bge-reranker-base" } },
@@ -100,7 +101,16 @@ export function useConfig() {
     setState((prev) => ({ ...prev, step: Math.max(prev.step - 1, 0) }));
   }, []);
 
+  const goToStep = useCallback((targetStep) => {
+    setState((prev) => ({ ...prev, step: Math.max(0, Math.min(targetStep, TOTAL_STEPS)) }));
+  }, [TOTAL_STEPS]);
+
   const resetConfig = useCallback(() => {
+    try {
+      localStorage.removeItem(CONFIG_STORAGE_KEY);
+    } catch (e) {
+      console.error("Failed to clear pipeline config", e);
+    }
     setState({ config: DEFAULTS, step: 0 });
   }, []);
 
@@ -116,6 +126,7 @@ export function useConfig() {
     applyPreset,
     nextStep,
     prevStep,
+    goToStep,
     resetConfig,
   };
 }

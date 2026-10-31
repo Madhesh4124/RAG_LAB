@@ -16,6 +16,7 @@ import {
   IconBuildPipeline,
   IconUpload,
   IconSettings,
+  IconRefresh,
 } from "../common/Icons";
 
 const STEP_LABELS = ["Upload Document", "Chunking Strategy", "Embeddings", "Retrieval & Rerank", "LLM & Memory"];
@@ -24,7 +25,7 @@ export default function ConfigWizard() {
   const navigate = useNavigate();
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [pickerReloadToken, setPickerReloadToken] = useState(0);
-  const { config, step, updateChunking, updateEmbedding, updateRetrieval, updateLLM, updateMemory, applyPreset, nextStep, prevStep } = useConfig();
+  const { config, step, updateChunking, updateEmbedding, updateRetrieval, updateLLM, updateMemory, applyPreset, nextStep, prevStep, goToStep, resetConfig } = useConfig();
   const { document, upload, uploading, uploadProgress, clearDocument, selectDocument } = useDocument();
   const { docId, docIds, filename, setDocId, setDocIds, setConfigId, setFilename } = useSession();
 
@@ -53,6 +54,11 @@ export default function ConfigWizard() {
     } else {
       clearDocument();
     }
+  };
+
+    const handleReset = () => {
+    resetConfig();
+    handleClear();
   };
 
   const handleClear = () => {
@@ -183,12 +189,25 @@ export default function ConfigWizard() {
             Step-by-step customization of chunking, vector embeddings, retrieval algorithms, and generation.
           </p>
         </div>
-        {step > 0 && <PresetSelector onSelect={applyPreset} />}
+        <div className="flex flex-col sm:items-end gap-2.5">
+          {step > 0 && <PresetSelector onSelect={applyPreset} />}
+          {step > 0 && (
+            <button
+              type="button"
+              onClick={handleReset}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-zinc-700/80 bg-zinc-800/80 hover:bg-zinc-800 hover:border-zinc-600 text-zinc-300 hover:text-white text-xs font-semibold transition-all duration-200 cursor-pointer shadow-sm"
+              title="Reset pipeline and return to Step 1 (Upload Document)"
+            >
+              <IconRefresh size={12} className="text-amber-400" />
+              <span>Reset to Step 1</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Stepper bar */}
       <div className="py-1">
-        <StepIndicator steps={STEP_LABELS} current={step} />
+        <StepIndicator steps={STEP_LABELS} current={step} onStepClick={goToStep} />
       </div>
 
       {/* Active Step Panel */}
@@ -198,15 +217,28 @@ export default function ConfigWizard() {
 
       {/* Footer Navigation */}
       <div className="flex items-center justify-between pt-4 border-t border-zinc-800">
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={prevStep}
-          disabled={step === 0}
-          leadingIcon={<IconArrowLeft size={12} />}
-        >
-          Back
-        </Button>
+        <div className="flex items-center gap-3">
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={prevStep}
+            disabled={step === 0}
+            leadingIcon={<IconArrowLeft size={12} />}
+          >
+            Back
+          </Button>
+          {step > 0 && (
+            <button
+              type="button"
+              onClick={handleReset}
+              className="inline-flex items-center gap-1 text-xs font-medium text-zinc-400 hover:text-amber-400 transition-colors cursor-pointer px-2 py-1 rounded hover:bg-white/[0.04]"
+              title="Return directly to Step 1 (Upload Document)"
+            >
+              <IconRefresh size={11} />
+              <span>Reset to Step 1</span>
+            </button>
+          )}
+        </div>
 
         <span className="font-mono text-[11px] text-zinc-500">
           Step {step + 1} of {STEP_LABELS.length}

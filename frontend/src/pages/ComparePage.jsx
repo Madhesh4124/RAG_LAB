@@ -33,6 +33,22 @@ function createPresetConfigs() {
       threshold: 0.3,
     },
     {
+      name: "Deep Semantic (Gemini)",
+      chunk_strategy: "semantic",
+      chunk_params: {
+        max_chunk_size: 512,
+        min_chunk_size: 100,
+        similarity_threshold: 0.7,
+        hard_split_threshold: 0.4,
+        overlap_sentences: 1,
+      },
+      embedding_provider: "google",
+      embedding_model: "models/gemini-embedding-001",
+      top_k: 5,
+      threshold: 0.5,
+    },
+
+    {
       name: "Precision Focus",
       chunk_strategy: "semantic",
       chunk_params: {

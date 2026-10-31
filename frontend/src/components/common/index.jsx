@@ -133,38 +133,51 @@ export function EyebrowTag({ children }) {
 }
 
 // ── StepIndicator ─────────────────────────────────────────────────────────────
-export function StepIndicator({ steps, current }) {
+export function StepIndicator({ steps, current, onStepClick }) {
   return (
-    <div className="flex items-center gap-2" role="list" aria-label="Progress steps">
-      {steps.map((label, i) => (
-        <div key={label} className="flex items-center gap-2" role="listitem">
+    <div className="flex items-center gap-2 flex-wrap" role="list" aria-label="Progress steps">
+      {steps.map((label, i) => {
+        const isClickable = typeof onStepClick === "function" && (i <= current || i === 0);
+        return (
           <div
-            className={`w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-mono font-medium transition-colors ${
-              i < current
-                ? "bg-amber-500 text-zinc-950"
-                : i === current
-                  ? "bg-zinc-100 text-zinc-950 font-bold"
-                  : "bg-zinc-800/80 text-zinc-500 border border-zinc-700/50"
-            }`}
+            key={label}
+            className={`flex items-center gap-2 ${isClickable ? "cursor-pointer group" : ""}`}
+            role="listitem"
+            onClick={() => isClickable && onStepClick(i)}
+            title={isClickable ? `Jump to ${label}` : undefined}
           >
-            {i < current ? <IconCheck size={10} /> : i + 1}
-          </div>
-          <span
-            className={`text-xs font-medium tracking-tight ${
-              i === current ? "text-zinc-100 font-semibold" : i < current ? "text-zinc-400" : "text-zinc-600"
-            }`}
-          >
-            {label}
-          </span>
-          {i < steps.length - 1 && (
             <div
-              className={`h-px w-6 transition-colors ${
-                i < current ? "bg-amber-500/40" : "bg-zinc-800"
+              className={`w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-mono font-medium transition-all ${
+                i < current
+                  ? "bg-amber-500 text-zinc-950 group-hover:scale-105"
+                  : i === current
+                    ? "bg-zinc-100 text-zinc-950 font-bold"
+                    : "bg-zinc-800/80 text-zinc-500 border border-zinc-700/50"
               }`}
-            />
-          )}
-        </div>
-      ))}
+            >
+              {i < current ? <IconCheck size={10} /> : i + 1}
+            </div>
+            <span
+              className={`text-xs font-medium tracking-tight transition-colors ${
+                i === current
+                  ? "text-zinc-100 font-semibold"
+                  : i < current
+                    ? "text-zinc-400 group-hover:text-zinc-200"
+                    : "text-zinc-600"
+              }`}
+            >
+              {label}
+            </span>
+            {i < steps.length - 1 && (
+              <div
+                className={`h-px w-6 transition-colors ${
+                  i < current ? "bg-amber-500/40" : "bg-zinc-800"
+                }`}
+              />
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

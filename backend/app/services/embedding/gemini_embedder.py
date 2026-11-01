@@ -6,6 +6,7 @@ embeddings via Google's Gemini embedding models.
 
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -37,7 +38,6 @@ class GeminiEmbedder(BaseEmbedder):
     """
 
     def __init__(self, model: str = "models/gemini-embedding-001") -> None:
-        import threading
         self.model = model or "models/gemini-embedding-001"
         self._keys = self._collect_api_keys()
         if not self._keys:
@@ -53,7 +53,7 @@ class GeminiEmbedder(BaseEmbedder):
         self._current_index = 0
         self._lock = threading.Lock()
         logger.info(
-            "[GeminiEmbedder] Initialized with %d API key(s) in round-robin pool for model %s",
+            "[GeminiEmbedder] Initialized with %d API key(s) in pool for model %s",
             len(self._clients),
             self.model,
         )
@@ -83,9 +83,11 @@ class GeminiEmbedder(BaseEmbedder):
 
     def _extract_retry_delay(self, error_msg: str, default_wait: float) -> float:
         import re
+        # Google sends: "Please retry in 45.417289074s."
         m = re.search(r"retry in ([0-9]+(?:\.[0-9]+)?)s", error_msg, re.IGNORECASE)
         if m:
             return float(m.group(1)) + 1.5
+        # Or: "'retryDelay': '45s'"
         m = re.search(r"['\"]retryDelay['\"]\s*:\s*['\"]([0-9]+)s?['\"]", error_msg, re.IGNORECASE)
         if m:
             return float(m.group(1)) + 1.5
@@ -116,7 +118,7 @@ class GeminiEmbedder(BaseEmbedder):
                         exponential_default = min(2 ** (attempt + 1) + 2, 60)
                         wait_time = self._extract_retry_delay(error_msg, exponential_default)
                         logger.warning(
-                            "[GeminiEmbedder] Rate limit hit across keys (attempt %s/%s). Waiting %ss.",
+                            "[GeminiEmbedder] Rate limit hit (attempt %s/%s). Waiting %ss.",
                             attempt + 1,
                             max_retries,
                             round(wait_time, 2),

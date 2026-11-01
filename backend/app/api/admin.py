@@ -92,6 +92,11 @@ def _clear_runtime_caches() -> None:
     except Exception:
         pass
     try:
+        from chromadb.api.client import SharedSystemClient
+        SharedSystemClient.clear_system_cache()
+    except Exception:
+        pass
+    try:
         PipelineManager.clear_cache()
     except Exception:
         pass

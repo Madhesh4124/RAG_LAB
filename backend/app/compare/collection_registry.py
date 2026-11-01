@@ -119,10 +119,28 @@ def _load_embedder(embedding_provider: str, embedding_model: str):
         return _EMBEDDER_CACHE[cache_key]
 
 
+import uuid
+
+
+def _clear_chroma_system() -> None:
+    """Purge ChromaDB's process-wide client system cache and open SQLite handles."""
+    try:
+        from chromadb.api.client import SharedSystemClient
+        SharedSystemClient.clear_system_cache()
+    except Exception:
+        pass
+
+
 def _reset_corrupt_chroma_db(persist_dir: Path) -> None:
     cache_key = str(persist_dir.resolve())
     with _CLIENT_CACHE_LOCK:
-        _CLIENT_CACHE.pop(cache_key, None)
+        cached = _CLIENT_CACHE.pop(cache_key, None)
+        if cached and hasattr(cached, "close"):
+            try:
+                cached.close()
+            except Exception:
+                pass
+    _clear_chroma_system()
     for fname in ["chroma.sqlite3", "chroma.sqlite3-wal", "chroma.sqlite3-shm"]:
         target = persist_dir / fname
         if target.exists():
@@ -172,13 +190,23 @@ def get_or_load_collection(
         )
     except Exception as exc:
         err_str = str(exc).lower()
-        if "malformed" in err_str or "code: 11" in err_str or "code: 1032" in err_str or "readonly" in err_str:
+        if any(tok in err_str for tok in ["malformed", "code: 11", "code: 1032", "readonly", "read-only"]):
             _reset_corrupt_chroma_db(_PERSIST_DIR)
-            return Chroma(
-                collection_name=scoped_collection_name,
-                embedding_function=embedder,
-                client=_get_cached_client(_PERSIST_DIR),
-            )
+            try:
+                return Chroma(
+                    collection_name=scoped_collection_name,
+                    embedding_function=embedder,
+                    client=_get_cached_client(_PERSIST_DIR),
+                )
+            except Exception:
+                # Guaranteed writable fallback path if OS/SQLite still locks the original file
+                fallback_path = Path(tempfile.gettempdir()) / f"chroma_rescue_{uuid.uuid4().hex[:8]}"
+                fallback_path.mkdir(parents=True, exist_ok=True)
+                return Chroma(
+                    collection_name=scoped_collection_name,
+                    embedding_function=embedder,
+                    client=PersistentClient(path=str(fallback_path)),
+                )
         try:
             return Chroma(
                 collection_name=scoped_collection_name,
@@ -221,7 +249,14 @@ def clear_collection_registry() -> None:
     with _EMBEDDER_CACHE_LOCK:
         _EMBEDDER_CACHE.clear()
     with _CLIENT_CACHE_LOCK:
+        for client in _CLIENT_CACHE.values():
+            if hasattr(client, 'close'):
+                try:
+                    client.close()
+                except Exception:
+                    pass
         _CLIENT_CACHE.clear()
+    _clear_chroma_system()
     return None
 
 

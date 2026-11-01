@@ -142,7 +142,8 @@ def _get_cached_client(persist_dir: Path):
     try:
         client = PersistentClient(path=cache_key)
     except Exception as exc:
-        if "malformed" in str(exc).lower() or "code: 11" in str(exc).lower():
+        err_str = str(exc).lower()
+        if "malformed" in err_str or "code: 11" in err_str or "code: 1032" in err_str or "readonly" in err_str:
             _reset_corrupt_chroma_db(persist_dir)
             client = PersistentClient(path=cache_key)
         else:
@@ -170,7 +171,8 @@ def get_or_load_collection(
             client=_get_cached_client(_PERSIST_DIR),
         )
     except Exception as exc:
-        if "malformed" in str(exc).lower() or "code: 11" in str(exc).lower():
+        err_str = str(exc).lower()
+        if "malformed" in err_str or "code: 11" in err_str or "code: 1032" in err_str or "readonly" in err_str:
             _reset_corrupt_chroma_db(_PERSIST_DIR)
             return Chroma(
                 collection_name=scoped_collection_name,

@@ -55,17 +55,33 @@ class GeminiEmbedder(BaseEmbedder):
         """The name of the embedding model."""
         return self.model
 
+    def _extract_retry_delay(self, error_msg: str, default_wait: float) -> float:
+        import re
+        # Google sends: "Please retry in 45.417289074s."
+        m = re.search(r"retry in ([0-9]+(?:\.[0-9]+)?)s", error_msg, re.IGNORECASE)
+        if m:
+            return float(m.group(1)) + 1.5
+        # Or: "'retryDelay': '45s'"
+        m = re.search(r"['\"]retryDelay['\"]\s*:\s*['\"]([0-9]+)s?['\"]", error_msg, re.IGNORECASE)
+        if m:
+            return float(m.group(1)) + 1.5
+        return default_wait
+
     def _embed_batch_with_retry(self, texts: List[str]) -> List[List[float]]:
         import time
-        max_retries = 5
+        max_retries = 6
         for attempt in range(max_retries):
             try:
                 return self._embeddings.embed_documents(texts)
             except Exception as e:
                 error_msg = str(e)
                 if attempt < max_retries - 1 and any(token in error_msg for token in ["429", "RESOURCE_EXHAUSTED", "ResourceExhausted", "Quota", "rate limit", "RateLimit"]):
-                    wait_time = min(2 ** (attempt + 1) + 1, 15)
-                    logger.warning("[GeminiEmbedder] Rate limit hit (attempt %s/%s). Backing off for %ss: %s", attempt + 1, max_retries, wait_time, error_msg)
+                    exponential_default = min(2 ** (attempt + 1) + 2, 60)
+                    wait_time = self._extract_retry_delay(error_msg, exponential_default)
+                    logger.warning(
+                        "[GeminiEmbedder] Rate limit hit (attempt %s/%s). Waiting exact %ss: %s",
+                        attempt + 1, max_retries, round(wait_time, 2), error_msg[:180]
+                    )
                     time.sleep(wait_time)
                     continue
                 raise
@@ -73,15 +89,19 @@ class GeminiEmbedder(BaseEmbedder):
     def embed_text(self, text: str) -> List[float]:
         """Embed a single text string."""
         import time
-        max_retries = 5
+        max_retries = 6
         for attempt in range(max_retries):
             try:
                 return self._embeddings.embed_query(text)
             except Exception as e:
                 error_msg = str(e)
                 if attempt < max_retries - 1 and any(token in error_msg for token in ["429", "RESOURCE_EXHAUSTED", "ResourceExhausted", "Quota", "rate limit", "RateLimit"]):
-                    wait_time = min(2 ** (attempt + 1) + 1, 15)
-                    logger.warning("[GeminiEmbedder] Rate limit hit on embed_query (attempt %s/%s). Backing off for %ss: %s", attempt + 1, max_retries, wait_time, error_msg)
+                    exponential_default = min(2 ** (attempt + 1) + 2, 60)
+                    wait_time = self._extract_retry_delay(error_msg, exponential_default)
+                    logger.warning(
+                        "[GeminiEmbedder] Rate limit hit on embed_query (attempt %s/%s). Waiting exact %ss: %s",
+                        attempt + 1, max_retries, round(wait_time, 2), error_msg[:180]
+                    )
                     time.sleep(wait_time)
                     continue
                 raise

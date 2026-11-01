@@ -55,13 +55,40 @@ class GeminiEmbedder(BaseEmbedder):
         """The name of the embedding model."""
         return self.model
 
+    def _embed_batch_with_retry(self, texts: List[str]) -> List[List[float]]:
+        import time
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                return self._embeddings.embed_documents(texts)
+            except Exception as e:
+                error_msg = str(e)
+                if attempt < max_retries - 1 and any(token in error_msg for token in ["429", "RESOURCE_EXHAUSTED", "ResourceExhausted", "Quota", "rate limit", "RateLimit"]):
+                    wait_time = min(2 ** (attempt + 1) + 1, 15)
+                    logger.warning("[GeminiEmbedder] Rate limit hit (attempt %s/%s). Backing off for %ss: %s", attempt + 1, max_retries, wait_time, error_msg)
+                    time.sleep(wait_time)
+                    continue
+                raise
+
     def embed_text(self, text: str) -> List[float]:
         """Embed a single text string."""
-        return self._embeddings.embed_query(text)
+        import time
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                return self._embeddings.embed_query(text)
+            except Exception as e:
+                error_msg = str(e)
+                if attempt < max_retries - 1 and any(token in error_msg for token in ["429", "RESOURCE_EXHAUSTED", "ResourceExhausted", "Quota", "rate limit", "RateLimit"]):
+                    wait_time = min(2 ** (attempt + 1) + 1, 15)
+                    logger.warning("[GeminiEmbedder] Rate limit hit on embed_query (attempt %s/%s). Backing off for %ss: %s", attempt + 1, max_retries, wait_time, error_msg)
+                    time.sleep(wait_time)
+                    continue
+                raise
 
     def embed_batch(self, texts: List[str]) -> List[List[float]]:
-        """Embed a batch of text strings."""
-        return self._embeddings.embed_documents(texts)
+        """Embed a batch of text strings with automatic rate limit backoff."""
+        return self._embed_batch_with_retry(texts)
 
     def get_config(self) -> Dict[str, Any]:
         """Return the embedder's configuration."""

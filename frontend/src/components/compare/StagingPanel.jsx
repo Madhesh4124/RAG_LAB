@@ -87,7 +87,7 @@ export default function StagingPanel({
                       <span className={`font-mono text-[10px] ${color}`}>● {text}</span>
                     </div>
                     <p className="font-mono text-[10px] text-zinc-500 mt-0.5 truncate">
-                      top_k: {config.top_k} · threshold: {Number(config.threshold).toFixed(2)} · {config.embedding_model}
+                      {config.retrieval_type || "hybrid"} · top_k: {config.top_k} · {config.retrieval_type !== "sparse" ? `thr: ${Number(config.threshold ?? config.similarity_threshold ?? 0).toFixed(2)} · ` : ""}{config.embedding_model}
                     </p>
                   </div>
                   <button

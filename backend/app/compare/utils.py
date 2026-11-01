@@ -12,6 +12,11 @@ def derive_config_signature(config: Any, user_scope: str | None = None) -> str:
         "chunk_params": getattr(config, "chunk_params", {}) or {},
         "top_k": getattr(config, "top_k", None),
         "threshold": getattr(config, "threshold", None),
+        "retrieval_type": getattr(config, "retrieval_type", "hybrid"),
+        "alpha": getattr(config, "alpha", 0.7),
+        "lambda_mult": getattr(config, "lambda_mult", 0.5),
+        "reranker_enabled": getattr(config, "reranker_enabled", False),
+        "reranker_model": getattr(config, "reranker_model", None),
     }
     serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()

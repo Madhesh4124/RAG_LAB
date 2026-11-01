@@ -134,6 +134,27 @@ async def index_config(
                     vectorstore.add_documents(docs)
                 else:
                     raise
+
+            # Pre-cache BM25 corpus for sparse/hybrid retrieval in compare
+            try:
+                from app.services.retrieval.sparse_retriever import BM25Retriever
+                from app.services.chunking.base import Chunk
+                from app.compare.collection_registry import _scoped_collection_name
+                scoped_name = _scoped_collection_name(collection_name, user_scope)
+                bm25_chunks = [
+                    Chunk(
+                        id=str(d.metadata.get("chunk_id", i)),
+                        text=d.page_content,
+                        metadata=d.metadata or {},
+                    )
+                    for i, d in enumerate(docs)
+                ]
+                bm25 = BM25Retriever(collection_name=scoped_name)
+                bm25.index(bm25_chunks)
+            except Exception as bm_exc:
+                import logging
+                logging.getLogger(__name__).warning("BM25 pre-caching skipped: %s", bm_exc)
+
         return len(docs)
 
     chunk_count = await asyncio.to_thread(_index_sync)

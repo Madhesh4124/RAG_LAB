@@ -40,9 +40,18 @@ export default function ConfigCard({ config, onAdd, isStaged, disabled }) {
 
         {/* Parameters tags */}
         <div className="flex flex-wrap gap-1.5 mb-3">
+          <Badge color="violet">{config.retrieval_type || config.type || "hybrid"}</Badge>
           <Badge color="blue">{config.chunk_strategy}</Badge>
           <Badge color="ghost">k: {config.top_k}</Badge>
-          <Badge color="ghost">thr: {Number(config.threshold).toFixed(2)}</Badge>
+          {config.retrieval_type !== "sparse" && (
+            <Badge color="ghost">thr: {Number(config.threshold ?? config.similarity_threshold ?? 0).toFixed(2)}</Badge>
+          )}
+          {config.retrieval_type === "hybrid" && config.alpha != null && (
+            <Badge color="ghost">α: {Number(config.alpha).toFixed(1)}</Badge>
+          )}
+          {config.retrieval_type === "mmr" && config.lambda_mult != null && (
+            <Badge color="ghost">λ: {Number(config.lambda_mult).toFixed(1)}</Badge>
+          )}
           {config.reranker_enabled && (
             <Badge color="violet">Reranked</Badge>
           )}

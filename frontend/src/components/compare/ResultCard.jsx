@@ -78,8 +78,20 @@ export default function ResultCard({ result, onOpenEvaluation }) {
           )}
         </div>
         <div className="mt-2 flex flex-wrap gap-1.5">
+          <Badge color="purple">{result.config?.retrieval_type || "hybrid"}</Badge>
           <Badge color="blue">top_k: {result.config?.top_k}</Badge>
-          <Badge color="gray">threshold: {Number(result.config?.threshold ?? 0).toFixed(2)}</Badge>
+          {result.config?.retrieval_type !== "sparse" && (
+            <Badge color="gray">thr: {Number(result.config?.threshold ?? 0).toFixed(2)}</Badge>
+          )}
+          {result.config?.retrieval_type === "hybrid" && result.config?.alpha != null && (
+            <Badge color="gray">α: {Number(result.config?.alpha).toFixed(1)}</Badge>
+          )}
+          {result.config?.retrieval_type === "mmr" && result.config?.lambda_mult != null && (
+            <Badge color="gray">λ: {Number(result.config?.lambda_mult).toFixed(1)}</Badge>
+          )}
+          {result.config?.reranker_enabled && (
+            <Badge color="violet">reranked</Badge>
+          )}
           <Badge color="orange">{result.config?.chunk_strategy}</Badge>
           <Badge color="gray">{result.config?.embedding_model}</Badge>
         </div>

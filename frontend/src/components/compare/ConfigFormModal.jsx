@@ -54,8 +54,11 @@ export default function ConfigFormModal({ onSave, onCancel, existingNames = [], 
   const [chunkParams, setChunkParams] = useState({ ...DEFAULT_CHUNK_PARAMS.fixed_size });
   const [embeddingProvider, setEmbeddingProvider] = useState("nvidia");
   const [embeddingModel, setEmbeddingModel] = useState(EMBEDDING_MODELS.nvidia[0].value);
+  const [retrievalType, setRetrievalType] = useState("hybrid");
   const [topK, setTopK] = useState(5);
   const [threshold, setThreshold] = useState(0.5);
+  const [alpha, setAlpha] = useState(0.7);
+  const [lambdaMult, setLambdaMult] = useState(0.5);
   const [rerankerEnabled, setRerankerEnabled] = useState(false);
   const [rerankerModel, setRerankerModel] = useState("BAAI/bge-reranker-v2-m3");
   const [error, setError] = useState("");
@@ -84,18 +87,23 @@ export default function ConfigFormModal({ onSave, onCancel, existingNames = [], 
       chunk_params: chunkParams,
       embedding_provider: embeddingProvider,
       embedding_model: activeEmbeddingModel,
+      retrieval_type: retrievalType,
       top_k: Number(topK),
       threshold: Number(threshold),
+      similarity_threshold: Number(threshold),
+      alpha: Number(alpha),
+      lambda_mult: Number(lambdaMult),
       reranker_enabled: Boolean(rerankerEnabled),
       reranker_model: rerankerEnabled ? rerankerModel : undefined,
+      reranker_provider: rerankerEnabled ? "huggingface_api" : undefined,
       isPreset: false,
-      indexingStatus: "indexing",
+      indexingStatus: "idle",
     });
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm px-4">
-      <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-surface-1 p-6 shadow-2xl space-y-5">
+      <div className="w-full max-w-xl rounded-2xl border border-white/10 bg-surface-1 p-6 shadow-2xl space-y-5">
         <div className="flex items-start justify-between gap-3 border-b border-white/[0.08] pb-4">
           <div>
             <h3 className="text-xl font-bold text-[#FCF8D8] tracking-tight">Create Config</h3>
@@ -110,7 +118,7 @@ export default function ConfigFormModal({ onSave, onCancel, existingNames = [], 
           </div>
         )}
 
-        <div className="space-y-4 max-h-[65vh] overflow-y-auto pr-1">
+        <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
           <label className="block space-y-1.5">
             <span className="text-xs font-semibold uppercase tracking-wider text-[#ADACA7]">Config Name</span>
             <input
@@ -334,75 +342,168 @@ export default function ConfigFormModal({ onSave, onCancel, existingNames = [], 
             </select>
           </label>
 
-          <div className="space-y-2 p-3.5 rounded-xl bg-surface-2/60 border border-white/[0.07]">
-            <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-[#ADACA7]">
-              <span>top_k</span>
-              <span className="font-mono text-accent-violet-light font-bold text-xs bg-accent-violet/15 px-2.5 py-0.5 rounded-md border border-accent-violet/30">{topK}</span>
+          {/* Retrieval Parameters Section */}
+          <div className="pt-3 border-t border-white/[0.08] space-y-4">
+            <div>
+              <h4 className="text-sm font-bold text-[#FCF8D8] tracking-tight">Retrieval Parameters</h4>
+              <p className="text-[11px] text-[#D9DADF]/60 mt-0.5">
+                Configure search strategy, result limits, similarity filters, and optional rerankers.
+              </p>
             </div>
-            <input
-              type="range"
-              min={1}
-              max={10}
-              step={1}
-              value={topK}
-              onChange={(e) => setTopK(Number(e.target.value))}
-              disabled={isDisabled}
-              className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer accent-accent-violet"
-            />
-          </div>
 
-          <div className="space-y-2 p-3.5 rounded-xl bg-surface-2/60 border border-white/[0.07]">
-            <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-[#ADACA7]">
-              <span>Similarity Threshold</span>
-              <span className="font-mono text-accent-violet-light font-bold text-xs bg-accent-violet/15 px-2.5 py-0.5 rounded-md border border-accent-violet/30">{Number(threshold).toFixed(2)}</span>
-            </div>
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.05}
-              value={threshold}
-              onChange={(e) => setThreshold(Number(e.target.value))}
-              disabled={isDisabled}
-              className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer accent-accent-violet"
-            />
-          </div>
-
-          {/* Reranker section */}
-          <div className="space-y-3 p-3.5 rounded-xl bg-surface-2/60 border border-white/[0.07]">
-            <label className="flex items-center justify-between cursor-pointer">
-              <div>
-                <span className="text-xs font-semibold uppercase tracking-wider text-[#ADACA7] block">
-                  Enable Reranker
-                </span>
-                <span className="text-[11px] text-zinc-400">Re-scores candidates using cross-attention</span>
-              </div>
-              <input
-                type="checkbox"
-                checked={rerankerEnabled}
-                onChange={(e) => setRerankerEnabled(e.target.checked)}
+            <label className="block space-y-1.5">
+              <span className="text-xs font-semibold uppercase tracking-wider text-[#ADACA7]">Retrieval Type</span>
+              <select
+                value={retrievalType}
+                onChange={(e) => setRetrievalType(e.target.value)}
                 disabled={isDisabled}
-                className="h-4 w-4 rounded border-white/20 accent-accent-violet cursor-pointer"
-              />
+                className="w-full rounded-xl border border-white/10 bg-surface-2 px-3.5 py-2.5 text-sm text-white focus:border-accent-violet focus:ring-1 focus:ring-accent-violet outline-none transition-all"
+              >
+                <option value="dense" className="bg-surface-2 text-white">Dense (vector similarity)</option>
+                <option value="sparse" className="bg-surface-2 text-white">Sparse (BM25 keyword)</option>
+                <option value="hybrid" className="bg-surface-2 text-white">Hybrid (dense + sparse fusion)</option>
+                <option value="mmr" className="bg-surface-2 text-white">MMR (Max Marginal Relevance)</option>
+              </select>
             </label>
-            {rerankerEnabled && (
-              <div className="space-y-1.5 pt-2.5 border-t border-white/[0.08]">
-                <span className="text-[11px] font-medium text-white/70 block">Reranker Model</span>
-                <select
-                  value={rerankerModel}
-                  onChange={(e) => setRerankerModel(e.target.value)}
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              {/* Top-K */}
+              <div className="space-y-1.5 p-3.5 rounded-xl bg-surface-2/60 border border-white/[0.07]">
+                <div className="flex justify-between items-center text-sm">
+                  <span className="font-semibold text-white/90">Top-K chunks</span>
+                  <span className="text-accent-violet-light font-mono font-bold text-xs bg-accent-violet/15 px-2.5 py-0.5 rounded-md border border-accent-violet/30">{topK}</span>
+                </div>
+                <input
+                  type="range"
+                  min={1}
+                  max={10}
+                  step={1}
+                  value={topK}
+                  onChange={(e) => setTopK(Number(e.target.value))}
                   disabled={isDisabled}
-                  className="w-full rounded-xl border border-white/10 bg-surface-2 px-3 py-2 text-xs text-white focus:border-accent-violet focus:ring-1 focus:ring-accent-violet outline-none transition-all"
-                >
-                  <option value="BAAI/bge-reranker-v2-m3" className="bg-surface-2 text-white">
-                    BAAI/bge-reranker-v2-m3 (Hosted API - Best Quality)
-                  </option>
-                  <option value="BAAI/bge-reranker-base" className="bg-surface-2 text-white">
-                    BAAI/bge-reranker-base (Hosted API - Fast)
-                  </option>
-                </select>
+                  className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer accent-accent-violet"
+                />
+                <p className="text-[11px] text-white/45">How many chunks to return</p>
               </div>
-            )}
+
+              {/* Similarity threshold */}
+              {retrievalType !== "sparse" && (
+                <div className="space-y-1.5 p-3.5 rounded-xl bg-surface-2/60 border border-white/[0.07]">
+                  <div className="flex justify-between items-center text-sm">
+                    <span className="font-semibold text-white/90">Similarity Threshold</span>
+                    <span className="text-accent-violet-light font-mono font-bold text-xs bg-accent-violet/15 px-2.5 py-0.5 rounded-md border border-accent-violet/30">{Number(threshold).toFixed(2)}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0.0}
+                    max={1.0}
+                    step={0.05}
+                    value={threshold}
+                    onChange={(e) => setThreshold(Number(e.target.value))}
+                    disabled={isDisabled}
+                    className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer accent-accent-violet"
+                  />
+                  <p className="text-[11px] text-white/45">Chunks below this score are discarded</p>
+                </div>
+              )}
+
+              {/* Alpha for Hybrid */}
+              {retrievalType === "hybrid" && (
+                <div className="space-y-1.5 p-3.5 rounded-xl bg-surface-2/60 border border-white/[0.07]">
+                  <div className="flex justify-between items-center text-sm">
+                    <span className="font-semibold text-white/90">Alpha (Fusion Weight)</span>
+                    <span className="text-accent-violet-light font-mono font-bold text-xs bg-accent-violet/15 px-2.5 py-0.5 rounded-md border border-accent-violet/30">{Number(alpha).toFixed(1)}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0.0}
+                    max={1.0}
+                    step={0.1}
+                    value={alpha}
+                    onChange={(e) => setAlpha(Number(e.target.value))}
+                    disabled={isDisabled}
+                    className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer accent-accent-violet"
+                  />
+                  <p className="text-[11px] text-white/45">
+                    Dense weight = {Number(alpha).toFixed(1)}, Sparse weight = {(1 - alpha).toFixed(1)}
+                  </p>
+                </div>
+              )}
+
+              {/* Lambda for MMR */}
+              {retrievalType === "mmr" && (
+                <div className="space-y-1.5 p-3.5 rounded-xl bg-surface-2/60 border border-white/[0.07]">
+                  <div className="flex justify-between items-center text-sm">
+                    <span className="font-semibold text-white/90">Lambda (MMR Trade-off)</span>
+                    <span className="text-accent-violet-light font-mono font-bold text-xs bg-accent-violet/15 px-2.5 py-0.5 rounded-md border border-accent-violet/30">{Number(lambdaMult).toFixed(1)}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0.0}
+                    max={1.0}
+                    step={0.1}
+                    value={lambdaMult}
+                    onChange={(e) => setLambdaMult(Number(e.target.value))}
+                    disabled={isDisabled}
+                    className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer accent-accent-violet"
+                  />
+                  <div className="flex justify-between text-[11px] text-white/45">
+                    <span>Max Diversity</span>
+                    <span>Max Relevance</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Reranker section */}
+            <div className="space-y-3 p-3.5 rounded-xl bg-surface-2/60 border border-white/[0.07]">
+              <label className="flex items-center justify-between cursor-pointer">
+                <div>
+                  <span className="text-xs font-semibold uppercase tracking-wider text-[#ADACA7] block">
+                    Enable API Reranker
+                  </span>
+                  <span className="text-[11px] text-zinc-400">Re-scores candidates using cross-attention</span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={rerankerEnabled}
+                  onChange={(e) => setRerankerEnabled(e.target.checked)}
+                  disabled={isDisabled}
+                  className="h-4 w-4 rounded border-white/20 accent-accent-violet cursor-pointer"
+                />
+              </label>
+              {rerankerEnabled && (
+                <div className="space-y-1.5 pt-2.5 border-t border-white/[0.08]">
+                  <span className="text-[11px] font-medium text-white/70 block">Reranker Model (Hosted)</span>
+                  <select
+                    value={rerankerModel}
+                    onChange={(e) => setRerankerModel(e.target.value)}
+                    disabled={isDisabled}
+                    className="w-full rounded-xl border border-white/10 bg-surface-2 px-3 py-2 text-xs text-white focus:border-accent-violet focus:ring-1 focus:ring-accent-violet outline-none transition-all"
+                  >
+                    <option value="BAAI/bge-reranker-v2-m3" className="bg-surface-2 text-white">
+                      BAAI/bge-reranker-v2-m3 (Best quality)
+                    </option>
+                    <option value="BAAI/bge-reranker-base" className="bg-surface-2 text-white">
+                      BAAI/bge-reranker-base (Accurate)
+                    </option>
+                  </select>
+                </div>
+              )}
+            </div>
+
+            {/* Summary box */}
+            <div className="rounded-xl bg-surface-2/70 border border-white/10 p-3.5 text-xs text-white/80 space-y-1">
+              <p className="font-semibold text-white flex items-center gap-1.5">
+                <span>📋</span> Config Summary
+              </p>
+              <p className="text-white/70">
+                Using <strong className="text-white capitalize">{retrievalType}</strong> retrieval. Selecting up to <strong className="text-accent-violet-light">{topK} chunks</strong>
+                {retrievalType === "hybrid" ? ` (α = ${Number(alpha).toFixed(1)})` : ""}
+                {retrievalType === "mmr" ? ` (λ = ${Number(lambdaMult).toFixed(1)})` : ""}
+                {rerankerEnabled ? ` with ${rerankerModel.split("/").pop()} reranker` : ""}.
+              </p>
+            </div>
           </div>
         </div>
 

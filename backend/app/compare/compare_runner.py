@@ -172,6 +172,139 @@ async def _summarize_compare_context(
     return summary, fallback_results, fallback_chunks
 
 
+def _get_or_create_bm25_retriever(vectorstore: Any, scoped_collection_name: str) -> Any:
+    from app.services.retrieval.sparse_retriever import BM25Retriever
+    from app.services.chunking.base import Chunk
+
+    bm25 = BM25Retriever(collection_name=scoped_collection_name)
+    if not bm25.chunks:
+        try:
+            data = vectorstore.get()
+            docs = data.get("documents", []) or []
+            metas = data.get("metadatas", []) or []
+            ids = data.get("ids", []) or []
+            chunks = [
+                Chunk(
+                    id=str(ids[i]) if i < len(ids) else str(i),
+                    text=text,
+                    metadata=metas[i] if i < len(metas) and metas[i] else {},
+                )
+                for i, text in enumerate(docs)
+                if text and str(text).strip()
+            ]
+            if chunks:
+                bm25.index(chunks)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning("Could not auto-populate BM25 retriever: %s", e)
+    return bm25
+
+
+def _retrieve_compare_candidates(
+    query: str,
+    config: RAGConfig,
+    vectorstore: Any,
+    user_scope: str | None = None,
+) -> Tuple[List[Tuple], List[Tuple]]:
+    from langchain_core.documents import Document
+    from app.compare.collection_registry import _scoped_collection_name
+
+    retrieval_type = (
+        getattr(config, "retrieval_type", None)
+        or getattr(config, "type", None)
+        or "hybrid"
+    ).lower()
+
+    fetch_k = max(config.top_k * 2, 6) if getattr(config, "reranker_enabled", False) else config.top_k
+    threshold = float(getattr(config, "threshold", 0.5) if getattr(config, "threshold", None) is not None else 0.5)
+    scoped_name = _scoped_collection_name(config.collection_name, user_scope)
+
+    if retrieval_type == "dense":
+        raw_results = vectorstore.similarity_search_with_score(query, max(fetch_k, 10))
+        candidates = [(doc, _to_similarity(float(score))) for doc, score in raw_results]
+        filtered = filter_by_threshold(candidates, threshold)
+        if not filtered and candidates:
+            filtered = sorted(candidates, key=lambda x: float(x[1]), reverse=True)[:fetch_k]
+        return candidates, filtered
+
+    elif retrieval_type == "sparse":
+        bm25 = _get_or_create_bm25_retriever(vectorstore, scoped_name)
+        bm25_res = bm25.search(query, max(fetch_k, 10))
+        candidates = [
+            (Document(page_content=chunk.text, metadata=getattr(chunk, "metadata", {}) or {}), float(score))
+            for chunk, score in bm25_res
+        ]
+        filtered = filter_by_threshold(candidates, threshold) if threshold > 0 else candidates
+        if not filtered and candidates:
+            filtered = candidates[:fetch_k]
+        return candidates, filtered
+
+    elif retrieval_type == "mmr":
+        lambda_mult = float(getattr(config, "lambda_mult", 0.5))
+        pool_size = max(fetch_k * 4, 15)
+        raw_candidates = vectorstore.similarity_search_with_score(query, pool_size)
+        candidates = [(doc, _to_similarity(float(score))) for doc, score in raw_candidates]
+
+        try:
+            mmr_docs = vectorstore.max_marginal_relevance_search(
+                query,
+                k=fetch_k,
+                fetch_k=pool_size,
+                lambda_mult=lambda_mult,
+            )
+            score_map = {_extract_text(d): score for d, score in candidates}
+            selected = [(doc, score_map.get(_extract_text(doc), 0.5)) for doc in mmr_docs]
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Chroma MMR failed, falling back to dense: %s", exc)
+            selected = candidates[:fetch_k]
+
+        filtered = filter_by_threshold(selected, threshold)
+        if not filtered and selected:
+            filtered = sorted(selected, key=lambda x: float(x[1]), reverse=True)[:fetch_k]
+        return candidates, filtered
+
+    else:  # "hybrid"
+        alpha = float(getattr(config, "alpha", 0.7))
+        pool_size = max(fetch_k * 2, 10)
+
+        raw_dense = vectorstore.similarity_search_with_score(query, pool_size)
+        dense_results = [(doc, _to_similarity(float(score))) for doc, score in raw_dense]
+
+        bm25 = _get_or_create_bm25_retriever(vectorstore, scoped_name)
+        sparse_res = bm25.search(query, pool_size)
+        sparse_results = [
+            (Document(page_content=chunk.text, metadata=getattr(chunk, "metadata", {}) or {}), float(score))
+            for chunk, score in sparse_res
+        ]
+
+        if not sparse_results:
+            candidates = dense_results
+            filtered = filter_by_threshold(candidates, threshold)
+            if not filtered and candidates:
+                filtered = sorted(candidates, key=lambda x: float(x[1]), reverse=True)[:fetch_k]
+            return candidates, filtered
+
+        dense_dict = {_extract_text(doc): (doc, score) for doc, score in dense_results}
+        sparse_dict = {_extract_text(doc): (doc, score) for doc, score in sparse_results}
+
+        all_keys = list(dict.fromkeys(list(dense_dict.keys()) + list(sparse_dict.keys())))
+        merged = []
+        for key in all_keys:
+            doc = dense_dict[key][0] if key in dense_dict else sparse_dict[key][0]
+            d_score = dense_dict[key][1] if key in dense_dict else 0.0
+            s_score = sparse_dict[key][1] if key in sparse_dict else 0.0
+            combined_score = (alpha * d_score) + ((1.0 - alpha) * s_score)
+            merged.append((doc, combined_score))
+
+        merged.sort(key=lambda x: x[1], reverse=True)
+        candidates = merged
+        filtered = filter_by_threshold(candidates, threshold)
+        if not filtered and candidates:
+            filtered = candidates[:fetch_k]
+        return candidates, filtered
+
+
 async def run_single_config(
     query: str,
     config: RAGConfig,
@@ -305,22 +438,14 @@ async def run_single_config(
             chunk_details=chunk_details,
         )
 
-    fetch_k = max(config.top_k * 2, 6) if getattr(config, "reranker_enabled", False) else config.top_k
-    raw_results = await asyncio.to_thread(
-        vectorstore.similarity_search_with_score,
+    candidate_results, filtered_results = await asyncio.to_thread(
+        _retrieve_compare_candidates,
         query,
-        fetch_k,
+        config,
+        vectorstore,
+        user_scope,
     )
-
-    normalized_results: List[Tuple] = [
-        (doc, _to_similarity(float(score))) for doc, score in raw_results
-    ]
-    filtered_results = filter_by_threshold(normalized_results, config.threshold)
-
-    # If thresholding removes everything, keep top retrieved chunks so the
-    # comparison still has context to answer from.
-    if not filtered_results and normalized_results:
-        filtered_results = sorted(normalized_results, key=lambda item: float(item[1]), reverse=True)[: fetch_k]
+    normalized_results = candidate_results
 
     if getattr(config, "reranker_enabled", False) and filtered_results:
         try:

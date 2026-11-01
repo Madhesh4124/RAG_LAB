@@ -7,6 +7,8 @@ from app.compare.utils import derive_collection_name
 
 
 class RAGConfig(BaseModel):
+    model_config = {"extra": "allow"}
+
     name: str
     chunk_strategy: str = Field(
         ...,
@@ -15,9 +17,17 @@ class RAGConfig(BaseModel):
     embedding_provider: Optional[str] = Field(default=None, pattern="^(nvidia|huggingface|google)$")
     embedding_model: str
     chunk_params: Dict[str, Any] = Field(default_factory=dict)
-    top_k: int = Field(..., ge=1, le=10)
-    threshold: float = Field(..., ge=0.0, le=1.0)
+    top_k: int = Field(default=5, ge=1, le=10)
+    threshold: float = Field(default=0.5, ge=0.0, le=1.0)
     collection_name: str = ""
+
+    # Retrieval parameters matching custom pipeline window
+    retrieval_type: str = Field(default="hybrid", pattern="^(dense|sparse|hybrid|mmr)$")
+    alpha: float = Field(default=0.7, ge=0.0, le=1.0)
+    lambda_mult: float = Field(default=0.5, ge=0.0, le=1.0)
+    reranker_enabled: bool = False
+    reranker_model: Optional[str] = "BAAI/bge-reranker-v2-m3"
+    reranker_provider: Optional[str] = "huggingface_api"
 
     @model_validator(mode="after")
     def _populate_collection_name(self):
@@ -26,6 +36,11 @@ class RAGConfig(BaseModel):
             "chapter": "chapter_based",
         }
         self.chunk_strategy = strategy_alias.get(self.chunk_strategy, self.chunk_strategy)
+
+        if hasattr(self, "type") and getattr(self, "type", None):
+            self.retrieval_type = getattr(self, "type")
+        if hasattr(self, "similarity_threshold") and getattr(self, "similarity_threshold", None) is not None:
+            self.threshold = float(getattr(self, "similarity_threshold"))
 
         default_model_by_provider = {
             "nvidia": "nvidia/nemotron-3-embed-1b",

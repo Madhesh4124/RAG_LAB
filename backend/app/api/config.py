@@ -1,6 +1,6 @@
 import uuid
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -93,13 +93,39 @@ async def create_config(
 @router.get("/list", response_model=List[RAGConfigResponse])
 async def list_configs(
     doc_id: Optional[uuid.UUID] = Query(None),
+    include_inactive: bool = Query(False),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     stmt = select(RAGConfig).where(RAGConfig.user_id == current_user.id)
     if doc_id:
         stmt = stmt.where(RAGConfig.document_id == doc_id)
+    if not include_inactive:
+        stmt = stmt.where(RAGConfig.is_active.isnot(False))
     return (await db.execute(stmt)).scalars().all()
+
+
+@router.patch("/{config_id}/status", response_model=RAGConfigResponse)
+async def set_config_status(
+    config_id: uuid.UUID,
+    is_active: bool = Body(..., embed=True),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.services.pipeline_manager import PipelineManager
+
+    stmt = select(RAGConfig).where(RAGConfig.id == config_id, RAGConfig.user_id == current_user.id)
+    config_obj = (await db.execute(stmt)).scalars().first()
+    if not config_obj:
+        raise HTTPException(status_code=404, detail="Config not found")
+
+    config_obj.is_active = bool(is_active)
+    db.add(config_obj)
+    await db.commit()
+    await db.refresh(config_obj)
+    if not config_obj.is_active:
+        PipelineManager.invalidate(f"{current_user.id}:{config_id}")
+    return config_obj
 
 @router.get("/{config_id}", response_model=RAGConfigResponse)
 async def get_config(config_id: uuid.UUID, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):

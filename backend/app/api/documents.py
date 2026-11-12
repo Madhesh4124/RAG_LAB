@@ -52,6 +52,7 @@ async def search_documents(
 @router.post("/upload", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED)
 async def upload_document(
     request: Request,
+    response: Response,
     file: UploadFile = File(...),
     config: Optional[str] = Form(None),
     current_user: User = Depends(get_current_user),
@@ -81,7 +82,8 @@ async def upload_document(
         )
         existing = (await db.execute(dup_stmt)).scalars().first()
         if existing:
-            # Return the existing document — no re-upload, no re-index needed.
+            # Return the existing document — 200 OK instead of 201 Created.
+            response.status_code = status.HTTP_200_OK
             return existing
     # -------------------------------------------------------------------------
 

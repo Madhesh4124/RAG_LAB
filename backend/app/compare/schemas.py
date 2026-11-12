@@ -26,8 +26,8 @@ class RAGConfig(BaseModel):
     alpha: float = Field(default=0.7, ge=0.0, le=1.0)
     lambda_mult: float = Field(default=0.5, ge=0.0, le=1.0)
     reranker_enabled: bool = False
-    reranker_model: Optional[str] = "BAAI/bge-reranker-v2-m3"
-    reranker_provider: Optional[str] = "huggingface_api"
+    reranker_model: Optional[str] = "nvidia/nemotron-3.5-rerank-8b"
+    reranker_provider: Optional[str] = "nvidia"
 
     @model_validator(mode="after")
     def _populate_collection_name(self):

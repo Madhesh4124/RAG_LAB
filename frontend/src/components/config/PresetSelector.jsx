@@ -1,3 +1,5 @@
+import React from "react";
+
 const PRESETS = [
   { key: "fast",     label: "⚡ Fast",     desc: "Small chunks, quick answers. Less accurate." },
   { key: "balanced", label: "⚖️ Balanced", desc: "Good mix of speed and accuracy." },

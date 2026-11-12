@@ -338,6 +338,8 @@ async def prepare_chat_session(
         raise HTTPException(status_code=404, detail="Document not found")
     if not config:
         raise HTTPException(status_code=404, detail="Config not found")
+    if config.is_active is False:
+        raise HTTPException(status_code=400, detail="Configuration is inactive")
 
     pipeline_config = deepcopy(config.config_json or {})
     vectorstore_cfg = deepcopy(pipeline_config.get("vectorstore", {}))
@@ -419,6 +421,8 @@ async def chat_endpoint(
         raise HTTPException(status_code=404, detail="Document not found")
     if not config:
         raise HTTPException(status_code=404, detail="Config not found")
+    if config.is_active is False:
+        raise HTTPException(status_code=400, detail="Configuration is inactive")
 
     logger.info(
         "Chat request received user_id=%s doc_id=%s config_id=%s query=%r",
@@ -686,6 +690,8 @@ async def chat_stream_endpoint(
 
     if not docs or not config:
         raise HTTPException(status_code=404, detail="Resource not found")
+    if config.is_active is False:
+        raise HTTPException(status_code=400, detail="Configuration is inactive")
 
     # Align with /api/chat: skip LLM rate limit on valid cached global summary hits.
     scope_key = f"user:{current_user.id}"
@@ -920,7 +926,9 @@ async def reset_system(
     """Resets memory, deletes config-scoped history/summary, invalidates pipeline cache, and clears vector indices."""
     from pathlib import Path
     from sqlalchemy import delete
+    from sqlalchemy.exc import OperationalError
     from app.models.document_summary import DocumentSummary
+    from app.models.evaluation_report import EvaluationReport
     from app.services.pipeline_manager import PipelineManager
     from app.services.vectorstore.chroma_store import ChromaStore
 
@@ -929,7 +937,28 @@ async def reset_system(
     if not config:
         raise HTTPException(status_code=404, detail="Config not found")
 
-    # 1. Clear config-scoped chat history and cached summary for this user + document
+    # 1. Clear config-scoped chat history, evaluation reports, and cached summary for this user + document
+    msg_ids = (
+        await db.execute(
+            select(ChatMessage.id).where(
+                ChatMessage.document_id == doc_id,
+                ChatMessage.config_id == config_id,
+                ChatMessage.user_id == current_user.id,
+            )
+        )
+    ).scalars().all()
+    if msg_ids:
+        try:
+            await db.execute(
+                delete(EvaluationReport).where(
+                    EvaluationReport.message_id.in_(msg_ids),
+                    EvaluationReport.user_id == current_user.id,
+                )
+            )
+        except OperationalError as exc:
+            if "no such table: evaluation_reports" not in str(exc).lower():
+                raise
+
     msg_res = await db.execute(
         delete(ChatMessage).where(
             ChatMessage.document_id == doc_id,

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import ChatInterface from "../components/chat/ChatInterface";
 import { Button, Badge } from "../components/common/index";
 import DocumentPicker from "../components/upload/DocumentPicker";
@@ -7,7 +7,22 @@ import { useSession } from "../hooks/useSession";
 import { applyBestPreset, getIndexStatus, prepareChatSession, uploadDocument } from "../services/api";
 import { IconUpload, IconArrowRight, IconDocument, IconSettings } from "../components/common/Icons";
 
-const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+const cancellableSleep = (ms, signal) =>
+  new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve(false);
+      return;
+    }
+    const timerId = window.setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve(true);
+    }, ms);
+    const onAbort = () => {
+      window.clearTimeout(timerId);
+      resolve(false);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 
 export default function QuickChat() {
   const { docId, docIds, configId, setDocId, setDocIds, setConfigId, setFilename, setMode } = useSession();
@@ -32,6 +47,18 @@ export default function QuickChat() {
   const [reloadToken,     setReloadToken]     = useState(0);
   const [indexStatusMsg,  setIndexStatusMsg]  = useState("Preparing indexing job…");
   const [indexProgress,   setIndexProgress]   = useState(0);
+
+  const isMountedRef = useRef(true);
+  const pollAbortRef = useRef(null);
+  const startingRef = useRef(false);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      pollAbortRef.current?.abort();
+    };
+  }, []);
 
   const primaryDocId = useMemo(() => selectedDocIds[0] || "", [selectedDocIds]);
 
@@ -86,7 +113,7 @@ export default function QuickChat() {
   };
 
   const handleStartChat = async () => {
-    if (!primaryDocId) return;
+    if (!primaryDocId || startingRef.current) return;
 
     // Fast-path: if this document was already prepared with this config, skip re-indexing!
     if (docId === primaryDocId && configId) {
@@ -95,6 +122,11 @@ export default function QuickChat() {
       return;
     }
 
+    startingRef.current = true;
+    pollAbortRef.current?.abort();
+    const controller = new AbortController();
+    pollAbortRef.current = controller;
+
     setStage("indexing");
     setError("");
     setIndexStatusMsg("Creating indexing job…");
@@ -102,23 +134,25 @@ export default function QuickChat() {
 
     try {
       const { data } = await applyBestPreset({ document_id: primaryDocId });
+      if (controller.signal.aborted || !isMountedRef.current) return;
+
       const nextConfigId = data?.id || null;
       if (!nextConfigId) throw new Error("Failed to configure pipeline.");
-
-      setDocId(primaryDocId);
-      setConfigId(nextConfigId);
 
       const prepareResponse = await prepareChatSession({
         document_id: primaryDocId,
         document_ids: selectedDocIds,
         config_id: nextConfigId,
       });
+      if (controller.signal.aborted || !isMountedRef.current) return;
 
       const jobId = prepareResponse?.data?.job_id;
       if (jobId) {
         const startedAt = Date.now(), timeoutMs = 10 * 60 * 1000;
-        while (true) {
+        while (!controller.signal.aborted && isMountedRef.current) {
           const statusResponse = await getIndexStatus(jobId);
+          if (controller.signal.aborted || !isMountedRef.current) return;
+
           const status   = statusResponse?.data?.status   || "pending";
           const progress = Number(statusResponse?.data?.progress_pct ?? 0);
           setIndexProgress(progress);
@@ -130,16 +164,29 @@ export default function QuickChat() {
               : "Waiting for indexing engine…"
           );
           if ((Date.now() - startedAt) > timeoutMs) throw new Error("Indexing timed out.");
-          await sleep(1000);
+          const continued = await cancellableSleep(1000, controller.signal);
+          if (!continued || !isMountedRef.current) return;
         }
       }
+
+      if (controller.signal.aborted || !isMountedRef.current) return;
+      setDocId(primaryDocId);
+      setConfigId(nextConfigId);
       setStage("chat");
       setShowControls(false);
     } catch (err) {
+      if (controller.signal.aborted || !isMountedRef.current) return;
+      setConfigId(null);
       setError(err?.response?.data?.detail || err?.message || "Failed to initialize pipeline");
       setStage("ready");
     } finally {
-      setReloadToken((v) => v + 1);
+      startingRef.current = false;
+      if (pollAbortRef.current === controller) {
+        pollAbortRef.current = null;
+      }
+      if (isMountedRef.current && !controller.signal.aborted) {
+        setReloadToken((v) => v + 1);
+      }
     }
   };
 

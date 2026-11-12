@@ -105,6 +105,16 @@ export default function ComparePage() {
   const [showUploadModal, setShowUploadModal] = useState(false);
   const resultsRef = useRef(null);
   const activeDatasetRef = useRef(activeDataset);
+  const isMountedRef = useRef(true);
+  const runningQueryRef = useRef(false);
+  const runningStagedRef = useRef(false);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   const isDatasetMissing = !activeDataset || !activeDocId;
   const stagedLookup = useMemo(() => new Set(stagedConfigs.map((config) => config.name)), [stagedConfigs]);
@@ -114,11 +124,38 @@ export default function ComparePage() {
     [stagedConfigs, availableConfigs],
   );
   const readyStatuses = new Set(["ready", "already_exists"]);
-  const hasPendingIndexing = stagedConfigs.some((config) => {
-    const current = getConfigByName(config.name);
-    return !current || !readyStatuses.has(current.indexingStatus);
-  });
-  const isUiBlocked = isDatasetMissing || isLoading || hasPendingIndexing || !isQueryUnlocked;
+  const hasPendingIndexing =
+    stagedConfigsLive.length === 0 ||
+    stagedConfigsLive.some((config) => !readyStatuses.has(config.indexingStatus));
+  const comparePhase = isDatasetMissing
+    ? "needs_dataset"
+    : isRunningStaged
+      ? "indexing"
+      : isLoading
+        ? "querying"
+        : hasPendingIndexing || !isQueryUnlocked
+          ? "needs_indexing"
+          : "ready";
+  const isUiBlocked = comparePhase !== "ready";
+
+  useEffect(() => {
+    if (!stagedConfigs.length) return;
+    setAvailableConfigs((prev) => {
+      const existingNames = new Set(prev.map((c) => c.name));
+      const missingCustom = stagedConfigs.filter((c) => !existingNames.has(c.name));
+      if (!missingCustom.length) return prev;
+      return [
+        ...prev,
+        ...missingCustom.map((c) => ({ ...c, indexingStatus: c.indexingStatus || "idle" })),
+      ];
+    });
+  }, [stagedConfigs]);
+
+  useEffect(() => {
+    if (isQueryUnlocked && (isDatasetMissing || hasPendingIndexing)) {
+      setIsQueryUnlocked(false);
+    }
+  }, [isQueryUnlocked, isDatasetMissing, hasPendingIndexing, setIsQueryUnlocked]);
 
   useEffect(() => {
     if (!results || !results.length) return;
@@ -150,6 +187,7 @@ export default function ComparePage() {
 
   const updateConfigByName = (name, patch) => {
     setAvailableConfigs((prev) => prev.map((config) => (config.name === name ? { ...config, ...patch } : config)));
+    setStagedConfigs((prev) => prev.map((config) => (config.name === name ? { ...config, ...patch } : config)));
   };
 
   const indexConfig = async (config) => {
@@ -174,11 +212,11 @@ export default function ComparePage() {
           lambda_mult: config.lambda_mult != null ? Number(config.lambda_mult) : 0.5,
           reranker_enabled: Boolean(config.reranker_enabled),
           reranker_model: config.reranker_model,
-          reranker_provider: config.reranker_provider || "huggingface_api",
+          reranker_provider: config.reranker_provider || "nvidia",
         },
       });
 
-      if (activeDatasetRef.current !== datasetSnapshot) return;
+      if (!isMountedRef.current || activeDatasetRef.current !== datasetSnapshot) return;
 
       const status = data?.status === "already_exists" ? "already_exists" : "ready";
       updateConfigByName(config.name, {
@@ -188,7 +226,7 @@ export default function ComparePage() {
       showToast(status === "already_exists" ? `"${config.name}" already indexed.` : `"${config.name}" is ready.`);
       return status;
     } catch (error) {
-      if (activeDatasetRef.current !== datasetSnapshot) return;
+      if (!isMountedRef.current || activeDatasetRef.current !== datasetSnapshot) return;
       updateConfigByName(config.name, { indexingStatus: "error" });
       showToast(error?.response?.data?.detail || error?.message || `Failed to index "${config.name}".`, "error");
       return "error";
@@ -260,16 +298,19 @@ export default function ComparePage() {
         const formData = new FormData();
         formData.append("file", file);
         const { data } = await uploadDocument(formData, (progress) => {
+          if (!isMountedRef.current) return;
           const current = Math.max(0, Math.min(100, Number(progress) || 0));
           const overall = ((index + current / 100) / nextFiles.length) * 100;
           setUploadProgress(Math.round(overall));
         });
+        if (!isMountedRef.current) return;
         lastUploaded = data;
         if (data?.id) {
           uploadedIds.push(String(data.id));
           uploadedNames.push(data.filename || file.name);
         }
       }
+      if (!isMountedRef.current) return;
       if (lastUploaded) {
         setDocId(lastUploaded?.id || null);
         if (uploadedIds.length > 0) {
@@ -282,10 +323,13 @@ export default function ComparePage() {
       showToast(`Uploaded ${nextFiles.length} file(s).`);
       setShowUploadModal(false);
     } catch (error) {
+      if (!isMountedRef.current) return;
       const detail = error?.response?.data?.detail || error?.message || "Upload failed.";
       showToast(detail, "error");
     } finally {
-      setIsUploading(false);
+      if (isMountedRef.current) {
+        setIsUploading(false);
+      }
     }
   };
 
@@ -301,18 +345,23 @@ export default function ComparePage() {
       setQuery("");
       setStagedConfigs([]);
       const { data } = await clearChromaDb();
+      if (!isMountedRef.current) return;
       setAvailableConfigs(createPresetConfigs());
       showToast(`Cleared ChromaDB: ${Array.isArray(data?.cleared) ? data.cleared.length : 0} location(s).`);
     } catch (error) {
+      if (!isMountedRef.current) return;
       showToast(error?.response?.data?.detail || error?.message || "Failed to clear ChromaDB.", "error");
     } finally {
-      setIsLoading(false);
+      if (isMountedRef.current) {
+        setIsLoading(false);
+      }
     }
   };
 
   const handleRunAndSaveConfigs = async () => {
-    if (stagedConfigs.length < 1 || isDatasetMissing || isRunningStaged) return;
+    if (stagedConfigs.length < 1 || isDatasetMissing || isRunningStaged || runningStagedRef.current) return;
 
+    runningStagedRef.current = true;
     setIsRunningStaged(true);
     setResults(null);
     try {
@@ -326,6 +375,8 @@ export default function ComparePage() {
         })
       );
 
+      if (!isMountedRef.current) return;
+
       const hasErrors = statuses.some((status) => status === "error" || !status);
 
       if (hasErrors) {
@@ -336,17 +387,21 @@ export default function ComparePage() {
         showToast("Configs are saved. Query box is now active.");
       }
     } finally {
-      setIsRunningStaged(false);
+      runningStagedRef.current = false;
+      if (isMountedRef.current) {
+        setIsRunningStaged(false);
+      }
     }
   };
 
   const handleRun = async () => {
-    if (!query.trim() || stagedConfigs.length < 1 || isLoading || isDatasetMissing) return;
+    if (!query.trim() || stagedConfigs.length < 1 || isLoading || isDatasetMissing || runningQueryRef.current) return;
     if (hasPendingIndexing) {
       showToast("Wait until all staged configs are ready before running.", "warning");
       return;
     }
 
+    runningQueryRef.current = true;
     setIsLoading(true);
     setResults(null);
 
@@ -369,21 +424,26 @@ export default function ComparePage() {
             lambda_mult: current.lambda_mult != null ? Number(current.lambda_mult) : 0.5,
             reranker_enabled: Boolean(current.reranker_enabled),
             reranker_model: current.reranker_model,
-            reranker_provider: current.reranker_provider || "huggingface_api",
+            reranker_provider: current.reranker_provider || "nvidia",
             collection_name: current.collection_name,
           };
         }),
       };
 
       const { data } = await compareConfigs(payload);
+      if (!isMountedRef.current) return;
       setResults(Array.isArray(data?.results) ? data.results : []);
       showToast("Comparison complete.");
     } catch (error) {
+      if (!isMountedRef.current) return;
       const detail = error?.response?.data?.detail || error?.message || "Failed to run comparison.";
       showToast(detail, "error");
       setResults([]);
     } finally {
-      setIsLoading(false);
+      runningQueryRef.current = false;
+      if (isMountedRef.current) {
+        setIsLoading(false);
+      }
     }
   };
 

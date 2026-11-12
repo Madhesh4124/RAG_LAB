@@ -91,12 +91,15 @@ async def compare_configs(
             )
             cfg = (await db.execute(cfg_stmt)).scalars().first()
             if cfg:
+                if cfg.is_active is False:
+                    raise HTTPException(status_code=400, detail=f"Configuration '{cfg.name}' is inactive")
                 configs.append(cfg)
     else:
-        # Get all configs for this document
+        # Get all active configs for this document
         stmt = select(RAGConfig).where(
             RAGConfig.document_id == document_id,
             RAGConfig.user_id == current_user.id,
+            RAGConfig.is_active.isnot(False),
         )
         configs = (await db.execute(stmt)).scalars().all()
     

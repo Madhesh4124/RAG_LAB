@@ -60,7 +60,7 @@ export default function ConfigFormModal({ onSave, onCancel, existingNames = [], 
   const [alpha, setAlpha] = useState(0.7);
   const [lambdaMult, setLambdaMult] = useState(0.5);
   const [rerankerEnabled, setRerankerEnabled] = useState(false);
-  const [rerankerModel, setRerankerModel] = useState("BAAI/bge-reranker-v2-m3");
+  const rerankerModel = "nvidia/nemotron-3.5-rerank-8b";
   const [error, setError] = useState("");
 
   const normalizedName = useMemo(() => name.trim(), [name]);
@@ -95,7 +95,9 @@ export default function ConfigFormModal({ onSave, onCancel, existingNames = [], 
       lambda_mult: Number(lambdaMult),
       reranker_enabled: Boolean(rerankerEnabled),
       reranker_model: rerankerEnabled ? rerankerModel : undefined,
-      reranker_provider: rerankerEnabled ? "huggingface_api" : undefined,
+      reranker_provider: rerankerEnabled
+        ? (rerankerModel.startsWith("nvidia/") ? "nvidia" : "cross_encoder")
+        : undefined,
       isPreset: false,
       indexingStatus: "idle",
     });
@@ -456,13 +458,15 @@ export default function ConfigFormModal({ onSave, onCancel, existingNames = [], 
             </div>
 
             {/* Reranker section */}
-            <div className="space-y-3 p-3.5 rounded-xl bg-surface-2/60 border border-white/[0.07]">
-              <label className="flex items-center justify-between cursor-pointer">
+            <div className="p-3.5 rounded-xl bg-surface-2/60 border border-white/[0.07]">
+              <label className="flex items-center justify-between gap-3 cursor-pointer">
                 <div>
                   <span className="text-xs font-semibold uppercase tracking-wider text-[#ADACA7] block">
                     Enable API Reranker
                   </span>
-                  <span className="text-[11px] text-zinc-400">Re-scores candidates using cross-attention</span>
+                  <span className="text-[11px] text-zinc-400">
+                    Uses <span className="font-mono text-white/80">nvidia/nemotron-3.5-rerank-8b</span> (NVIDIA NIM)
+                  </span>
                 </div>
                 <input
                   type="checkbox"
@@ -472,24 +476,6 @@ export default function ConfigFormModal({ onSave, onCancel, existingNames = [], 
                   className="h-4 w-4 rounded border-white/20 accent-accent-violet cursor-pointer"
                 />
               </label>
-              {rerankerEnabled && (
-                <div className="space-y-1.5 pt-2.5 border-t border-white/[0.08]">
-                  <span className="text-[11px] font-medium text-white/70 block">Reranker Model (Hosted)</span>
-                  <select
-                    value={rerankerModel}
-                    onChange={(e) => setRerankerModel(e.target.value)}
-                    disabled={isDisabled}
-                    className="w-full rounded-xl border border-white/10 bg-surface-2 px-3 py-2 text-xs text-white focus:border-accent-violet focus:ring-1 focus:ring-accent-violet outline-none transition-all"
-                  >
-                    <option value="BAAI/bge-reranker-v2-m3" className="bg-surface-2 text-white">
-                      BAAI/bge-reranker-v2-m3 (Best quality)
-                    </option>
-                    <option value="BAAI/bge-reranker-base" className="bg-surface-2 text-white">
-                      BAAI/bge-reranker-base (Accurate)
-                    </option>
-                  </select>
-                </div>
-              )}
             </div>
 
             {/* Summary box */}

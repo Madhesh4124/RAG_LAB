@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { Button, InlineAlert } from "../components/common/index";
@@ -18,6 +18,15 @@ export default function Login() {
   const [error, setError] = useState("");
   const [showNoticeModal, setShowNoticeModal] = useState(false);
   const [copiedEmail, setCopiedEmail] = useState(false);
+  const copyTimerRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current) {
+        window.clearTimeout(copyTimerRef.current);
+      }
+    };
+  }, []);
 
   const nextPath = location.state?.from || "/mode-select";
 
@@ -49,7 +58,13 @@ export default function Login() {
   const handleCopyEmail = () => {
     navigator.clipboard?.writeText("madhesh4124@gmail.com");
     setCopiedEmail(true);
-    setTimeout(() => setCopiedEmail(false), 2000);
+    if (copyTimerRef.current) {
+      window.clearTimeout(copyTimerRef.current);
+    }
+    copyTimerRef.current = window.setTimeout(() => {
+      setCopiedEmail(false);
+      copyTimerRef.current = null;
+    }, 2000);
   };
 
   const inputClass =

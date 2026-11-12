@@ -17,10 +17,13 @@ export default function StagingPanel({
   useEffect(() => {
     if (!stagedConfigs.length) { setLoadingProgressByName({}); return; }
     setLoadingProgressByName((prev) => {
-      const next = { ...prev };
+      const next = {};
       for (const config of stagedConfigs) {
-        if (config.indexingStatus === "indexing" && next[config.name] == null) next[config.name] = 6;
-        if (config.indexingStatus !== "indexing" && next[config.name] == null) next[config.name] = 0;
+        if (config.indexingStatus === "indexing") {
+          next[config.name] = prev[config.name] && prev[config.name] > 0 ? prev[config.name] : 6;
+        } else {
+          next[config.name] = 0;
+        }
       }
       return next;
     });

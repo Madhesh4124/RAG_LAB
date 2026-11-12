@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   bulkDeleteDocuments,
   clearAllDocuments,
@@ -33,17 +33,36 @@ export default function DocumentPicker({
   label = "Use previously uploaded document",
   reloadToken = 0,
 }) {
-  const [documents,  setDocuments]  = useState([]);
-  const [loading,    setLoading]    = useState(false);
-  const [error,      setError]      = useState("");
-  const [search,     setSearch]     = useState("");
+  const [documents,      setDocuments]      = useState([]);
+  const [loadingList,    setLoadingList]    = useState(false);
+  const [deletingId,     setDeletingId]     = useState(null);
+  const [mutatingAction, setMutatingAction] = useState(null);
+  const [error,          setError]          = useState("");
+  const [search,         setSearch]         = useState("");
+
+  const isMountedRef = useRef(true);
+  const loadSeqRef = useRef(0);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  const isMutating = Boolean(deletingId || mutatingAction);
+  const isBusy = loadingList || isMutating;
 
   const load = async (query = "") => {
-    setLoading(true); setError("");
+    const seq = ++loadSeqRef.current;
+    setLoadingList(true);
+    setError("");
     try {
       const response = query.trim()
         ? await searchDocuments(query.trim(), 100)
         : await listDocuments({ limit: 100 });
+      if (!isMountedRef.current || seq !== loadSeqRef.current) return;
+
       const fetchedDocs = Array.isArray(response?.data) ? response.data : [];
       setDocuments(fetchedDocs);
 
@@ -59,9 +78,14 @@ export default function DocumentPicker({
         }
       }
     } catch (err) {
+      if (!isMountedRef.current || seq !== loadSeqRef.current) return;
       setError(err?.response?.data?.detail || err?.message || "Failed to load documents");
       setDocuments([]);
-    } finally { setLoading(false); }
+    } finally {
+      if (isMountedRef.current && seq === loadSeqRef.current) {
+        setLoadingList(false);
+      }
+    }
   };
 
   useEffect(() => { void load(); }, [reloadToken]);
@@ -78,48 +102,76 @@ export default function DocumentPicker({
   };
 
   const handleDelete = async (docId, docName) => {
+    if (isMutating) return;
     if (!window.confirm(`Delete "${docName || "this document"}"? This cannot be undone.`)) return;
+    const targetKey = norm(docId);
+    setDeletingId(targetKey);
+    setError("");
     try {
-      setLoading(true);
       await deleteDocument(docId);
+      if (!isMountedRef.current) return;
       if (multiSelect && onSelectMany) {
         const current = new Set((values || []).map(norm));
-        if (current.has(norm(docId))) {
-          current.delete(norm(docId));
-          onSelectMany(documents.filter((d) => current.has(norm(d.id)) && norm(d.id) !== norm(docId)));
+        if (current.has(targetKey)) {
+          current.delete(targetKey);
+          onSelectMany(documents.filter((d) => current.has(norm(d.id)) && norm(d.id) !== targetKey));
         }
-      } else if (!multiSelect && onSelect && norm(value) === norm(docId)) { onSelect(null); }
+      } else if (!multiSelect && onSelect && norm(value) === targetKey) {
+        onSelect(null);
+      }
       await load(search);
     } catch (err) {
-      alert(err?.response?.data?.detail || err?.message || "Failed to delete document");
-    } finally { setLoading(false); }
+      if (isMountedRef.current) {
+        setError(err?.response?.data?.detail || err?.message || "Failed to delete document");
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setDeletingId(null);
+      }
+    }
   };
 
   const handleDeleteSelected = async () => {
-    if (!values || values.length === 0) return;
+    if (isMutating || !values || values.length === 0) return;
     if (!window.confirm(`Permanently delete ${values.length} selected document(s)? This cannot be undone.`)) return;
+    setMutatingAction("bulk-delete");
+    setError("");
     try {
-      setLoading(true);
       await bulkDeleteDocuments(values);
+      if (!isMountedRef.current) return;
       if (onSelectMany) onSelectMany([]);
       await load(search);
     } catch (err) {
-      alert(err?.response?.data?.detail || err?.message || "Failed to delete selected documents");
-    } finally { setLoading(false); }
+      if (isMountedRef.current) {
+        setError(err?.response?.data?.detail || err?.message || "Failed to delete selected documents");
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setMutatingAction(null);
+      }
+    }
   };
 
   const handleClearAllDocuments = async () => {
-    if (documents.length === 0) return;
+    if (isMutating || documents.length === 0) return;
     if (!window.confirm(`Delete ALL ${documents.length} document(s)? This cannot be undone.`)) return;
+    setMutatingAction("clear-all");
+    setError("");
     try {
-      setLoading(true);
       await clearAllDocuments();
+      if (!isMountedRef.current) return;
       if (multiSelect && onSelectMany) onSelectMany([]);
       else if (onSelect) onSelect(null);
       await load("");
     } catch (err) {
-      alert(err?.response?.data?.detail || err?.message || "Failed to clear all documents");
-    } finally { setLoading(false); }
+      if (isMountedRef.current) {
+        setError(err?.response?.data?.detail || err?.message || "Failed to clear all documents");
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setMutatingAction(null);
+      }
+    }
   };
 
   const filteredDocuments = useMemo(() => {
@@ -149,7 +201,7 @@ export default function DocumentPicker({
             <>
               <button type="button"
                 className="text-[11px] font-semibold text-accent-violet-light hover:text-white transition-colors duration-300 disabled:opacity-40"
-                onClick={handleSelectAll} disabled={disabled || loading}>
+                onClick={handleSelectAll} disabled={disabled || isBusy}>
                 {isAllSelected ? "Deselect all" : "Select all"}
               </button>
               <span className="text-white/35 select-none">|</span>
@@ -159,16 +211,16 @@ export default function DocumentPicker({
             <>
               <button type="button"
                 className="text-[11px] font-semibold text-red-400/60 hover:text-red-400 transition-colors duration-300 disabled:opacity-40"
-                onClick={handleClearAllDocuments} disabled={disabled || loading} title="Delete all uploaded documents">
-                Delete all
+                onClick={handleClearAllDocuments} disabled={disabled || isBusy} title="Delete all uploaded documents">
+                {mutatingAction === "clear-all" ? "Deleting all…" : "Delete all"}
               </button>
               <span className="text-white/35 select-none">|</span>
             </>
           )}
           <button type="button"
             className="inline-flex items-center gap-1 text-[11px] font-semibold text-white/50 hover:text-white/60 transition-colors duration-300 disabled:opacity-40"
-            onClick={() => void load(search)} disabled={disabled || loading}>
-            {loading ? (
+            onClick={() => void load(search)} disabled={disabled || isBusy}>
+            {loadingList ? (
               <><span className="h-3 w-3 animate-spin rounded-full border border-white/20 border-t-accent-violet" />Refreshing</>
             ) : (
               <>
@@ -193,7 +245,7 @@ export default function DocumentPicker({
               text-white placeholder-white/40 outline-none
               transition-all duration-400 ease-[cubic-bezier(0.32,0.72,0,1)]
               focus:border-accent-violet/40 focus:bg-white/[0.06] focus:shadow-[0_0_0_2px_rgba(221,112,11,0.14)]"
-            disabled={disabled || loading}
+            disabled={disabled || loadingList}
           />
           {search && (
             <button type="button" onClick={() => { setSearch(""); void load(""); }}
@@ -205,14 +257,14 @@ export default function DocumentPicker({
         <button type="button" onClick={() => void load(search)}
           className="px-4 py-2.5 text-sm font-semibold rounded-2xl bg-white/[0.05] border border-white/[0.07]
             text-white/50 hover:text-white hover:bg-white/[0.09] transition-all duration-300"
-          disabled={disabled || loading}>
+          disabled={disabled || loadingList}>
           Find
         </button>
       </div>
 
       {/* Document list */}
       <div className="rounded-2xl bg-surface-3 border border-white/[0.16] max-h-60 overflow-y-auto divide-y divide-white/[0.04]">
-        {loading && documents.length === 0 ? (
+        {loadingList && documents.length === 0 ? (
           <div className="py-8 text-center text-sm text-white/50 space-y-2">
             <div className="mx-auto h-5 w-5 animate-spin rounded-full border border-white/[0.07] border-t-accent-violet" />
             <p>Loading documents…</p>
@@ -229,16 +281,18 @@ export default function DocumentPicker({
           </div>
         ) : (
           filteredDocuments.map((doc) => {
-            const isChecked = multiSelect ? selectedSet.has(norm(doc.id)) : norm(value) === norm(doc.id);
+            const docKey = norm(doc.id);
+            const isChecked = multiSelect ? selectedSet.has(docKey) : norm(value) === docKey;
+            const isDeletingRow = deletingId === docKey;
             const isPdf = (doc.file_type || doc.filename || "").toLowerCase().includes("pdf");
             return (
               <div key={doc.id}
                 onClick={() => {
-                  if (disabled || loading) return;
+                  if (disabled || isBusy) return;
                   if (multiSelect) {
                     const current = new Set((values || []).map(norm));
-                    if (isChecked) current.delete(norm(doc.id));
-                    else current.add(norm(doc.id));
+                    if (isChecked) current.delete(docKey);
+                    else current.add(docKey);
                     if (onSelectMany) onSelectMany(documents.filter((item) => current.has(norm(item.id))));
                   } else { if (onSelect) onSelect(doc); }
                 }}
@@ -250,13 +304,14 @@ export default function DocumentPicker({
                   <input
                     type={multiSelect ? "checkbox" : "radio"}
                     checked={isChecked}
-                    disabled={disabled || loading}
+                    disabled={disabled || isBusy}
                     onChange={(e) => {
                       e.stopPropagation();
+                      if (disabled || isBusy) return;
                       if (multiSelect) {
                         const current = new Set((values || []).map(norm));
-                        if (e.target.checked) current.add(norm(doc.id));
-                        else current.delete(norm(doc.id));
+                        if (e.target.checked) current.add(docKey);
+                        else current.delete(docKey);
                         if (onSelectMany) onSelectMany(documents.filter((item) => current.has(norm(item.id))));
                       } else { if (onSelect) onSelect(doc); }
                     }}
@@ -284,17 +339,22 @@ export default function DocumentPicker({
                 {/* Delete btn */}
                 <button type="button"
                   onClick={(e) => { e.stopPropagation(); handleDelete(doc.id, doc.filename); }}
-                  disabled={disabled || loading}
-                  className="w-7 h-7 rounded-full flex items-center justify-center
+                  disabled={disabled || isBusy}
+                  className={`w-7 h-7 rounded-full flex items-center justify-center
                     text-white/40 hover:text-red-400 hover:bg-red-500/[0.08]
-                    opacity-0 group-hover:opacity-100 focus:opacity-100
-                    transition-all duration-300"
+                    ${isDeletingRow ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus:opacity-100"}
+                    transition-all duration-300 disabled:opacity-40`}
+                  aria-label={`Delete ${doc.filename}`}
                   title="Delete Document">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none"
-                    stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="3 6 5 6 21 6" />
-                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                  </svg>
+                  {isDeletingRow ? (
+                    <span className="h-3 w-3 animate-spin rounded-full border border-red-400/30 border-t-red-400" />
+                  ) : (
+                    <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none"
+                      stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="3 6 5 6 21 6" />
+                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                    </svg>
+                  )}
                 </button>
               </div>
             );
@@ -310,14 +370,14 @@ export default function DocumentPicker({
           </p>
           {values.length > 0 && (
             <div className="flex items-center gap-3">
-              <button type="button" onClick={handleClearSelection}
-                className="text-[11px] font-semibold text-accent-violet-light hover:text-white transition-colors duration-200">
+              <button type="button" onClick={handleClearSelection} disabled={disabled || isBusy}
+                className="text-[11px] font-semibold text-accent-violet-light hover:text-white transition-colors duration-200 disabled:opacity-40">
                 Clear selection
               </button>
               <span className="text-white/35">·</span>
-              <button type="button" onClick={handleDeleteSelected} disabled={disabled || loading}
+              <button type="button" onClick={handleDeleteSelected} disabled={disabled || isBusy}
                 className="text-[11px] font-semibold text-red-400/60 hover:text-red-400 transition-colors duration-200 disabled:opacity-40">
-                Delete ({values.length})
+                {mutatingAction === "bulk-delete" ? "Deleting…" : `Delete (${values.length})`}
               </button>
             </div>
           )}
@@ -333,8 +393,8 @@ export default function DocumentPicker({
               {selectedDocument.file_size && (
                 <span className="text-[11px] text-accent-violet-light">{formatFileSize(selectedDocument.file_size)}</span>
               )}
-              <button type="button" onClick={handleClearSelection}
-                className="text-[11px] font-semibold text-red-400/60 hover:text-red-400 transition-colors duration-200">
+              <button type="button" onClick={handleClearSelection} disabled={disabled || isBusy}
+                className="text-[11px] font-semibold text-red-400/60 hover:text-red-400 transition-colors duration-200 disabled:opacity-40">
                 Clear
               </button>
             </div>

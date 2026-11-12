@@ -1,5 +1,5 @@
-import { useState, useCallback } from "react";
-import { uploadDocument, getChunks, MOCK_CHUNKS } from "../services/api";
+import { useState, useCallback, useEffect, useRef } from "react";
+import { uploadDocument, getChunks } from "../services/api";
 
 export function useDocument() {
   const [document,       setDocument]       = useState(null);
@@ -8,6 +8,14 @@ export function useDocument() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [loadingChunks,  setLoadingChunks]  = useState(false);
   const [error,          setError]          = useState(null);
+
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   const upload = useCallback(async (fileOrFiles) => {
     const files = Array.isArray(fileOrFiles) ? fileOrFiles : [fileOrFiles];
@@ -24,48 +32,69 @@ export function useDocument() {
         const fd = new FormData();
         fd.append("file", file);
         const { data } = await uploadDocument(fd, (progress) => {
+          if (!isMountedRef.current) return;
           const current = Math.max(0, Math.min(100, Number(progress) || 0));
           const overall = ((index + current / 100) / validFiles.length) * 100;
           setUploadProgress(Math.round(overall));
         });
         lastUploaded = data;
       }
-      if (lastUploaded) {
+      if (isMountedRef.current && lastUploaded) {
         setDocument(lastUploaded);
       }
     } catch (err) {
-      setError(err.response?.data?.detail || err.message || "Upload failed");
+      if (isMountedRef.current) {
+        setError(err?.response?.data?.detail || err?.message || "Upload failed");
+      }
       console.error("Upload error:", err);
     } finally {
-      setUploading(false);
+      if (isMountedRef.current) {
+        setUploading(false);
+      }
     }
   }, []);
 
   const fetchChunks = useCallback(async (docId, configId) => {
-  setLoadingChunks(true);
-  setError(null);
-  try {
-    const { data } = await getChunks(docId, configId);
-    const chunkData = data?.chunks || data;
-    if (Array.isArray(chunkData) && chunkData.length > 0) {
-      setChunks(chunkData);
-    } else {
-      setChunks(MOCK_CHUNKS);
+    setLoadingChunks(true);
+    setError(null);
+    try {
+      const { data } = await getChunks(docId, configId);
+      if (!isMountedRef.current) return;
+      const chunkData = data?.chunks ?? data;
+      setChunks(Array.isArray(chunkData) ? chunkData : []);
+    } catch (e) {
+      console.error("[Chunks] Error:", e);
+      if (!isMountedRef.current) return;
+      setChunks([]);
+      setError(e?.response?.data?.detail || e?.message || "Failed to fetch chunks");
+    } finally {
+      if (isMountedRef.current) {
+        setLoadingChunks(false);
+      }
     }
-  } catch (e) {
-    console.error("[Chunks] Error:", e);
-    setChunks(MOCK_CHUNKS);
-    setError(e.message);
-  } finally {
-    setLoadingChunks(false);
-  }
-}, []);
+  }, []);
 
-  const clearDocument = () => { setDocument(null); setChunks([]); };
+  const clearDocument = useCallback(() => {
+    setDocument(null);
+    setChunks([]);
+    setError(null);
+  }, []);
 
   const selectDocument = useCallback((doc) => {
     setDocument(doc || null);
+    setError(null);
   }, []);
 
-  return { document, chunks, uploading, uploadProgress, loadingChunks, error, upload, fetchChunks, clearDocument, selectDocument };
+  return {
+    document,
+    chunks,
+    uploading,
+    uploadProgress,
+    loadingChunks,
+    error,
+    upload,
+    fetchChunks,
+    clearDocument,
+    selectDocument,
+  };
 }

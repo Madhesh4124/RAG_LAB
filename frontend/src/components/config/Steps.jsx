@@ -1,3 +1,5 @@
+import React from "react";
+
 // ── EmbeddingStep ────────────────────────────────────────────────
 const EMBEDDING_MODELS = {
   nvidia: [
@@ -177,28 +179,26 @@ export function RetrievalStep({ config, onChange }) {
 
         {/* Reranker */}
         <div className="space-y-3 pt-4 border-t border-white/[0.08]">
-          <label className="flex items-center gap-2.5 cursor-pointer">
+          <label className="flex items-start gap-3 cursor-pointer">
             <input
               type="checkbox"
               checked={config.reranker_enabled || false}
-              onChange={(e) => onChange({ reranker_enabled: e.target.checked })}
-              className="h-4 w-4 rounded border-white/20 bg-surface-1 text-accent-violet accent-accent-violet focus:ring-accent-violet cursor-pointer"
+              onChange={(e) =>
+                onChange({
+                  reranker_enabled: e.target.checked,
+                  reranker_provider: "nvidia",
+                  reranker_model: "nvidia/nemotron-3.5-rerank-8b",
+                })
+              }
+              className="mt-0.5 h-4 w-4 rounded border-white/20 bg-surface-1 text-accent-violet accent-accent-violet focus:ring-accent-violet cursor-pointer"
             />
-            <span className="text-sm font-semibold text-white">Enable API Reranker</span>
-          </label>
-          {config.reranker_enabled && (
-            <div className="space-y-2 pl-6">
-              <label className="text-xs font-semibold text-white/70">Reranker Model (Hosted)</label>
-              <select
-                value={config.reranker_model || "BAAI/bge-reranker-v2-m3"}
-                onChange={(e) => onChange({ reranker_provider: "huggingface_api", reranker_model: e.target.value })}
-                className="w-full rounded-xl border border-white/10 bg-surface-2 px-3 py-2 text-sm text-white focus:border-accent-violet outline-none"
-              >
-                <option value="BAAI/bge-reranker-v2-m3" className="bg-surface-2 text-white">BAAI/bge-reranker-v2-m3 (Best quality)</option>
-                <option value="BAAI/bge-reranker-base" className="bg-surface-2 text-white">BAAI/bge-reranker-base (Accurate)</option>
-              </select>
+            <div className="space-y-0.5">
+              <span className="text-sm font-semibold text-white block">Enable API Reranker</span>
+              <span className="text-xs text-white/55 block">
+                Uses <span className="font-mono text-white/80">nvidia/nemotron-3.5-rerank-8b</span> (NVIDIA NIM)
+              </span>
             </div>
-          )}
+          </label>
         </div>
 
         {/* Summary box */}
@@ -206,7 +206,10 @@ export function RetrievalStep({ config, onChange }) {
           <p className="font-semibold text-white flex items-center gap-1.5">
             <span>📋</span> Config Summary
           </p>
-          <p className="text-white/70">Using <strong className="text-white capitalize">{retrievalType}</strong> retrieval. Selecting up to <strong className="text-accent-violet-light">{topK} chunks</strong>.</p>
+          <p className="text-white/70">
+            Using <strong className="text-white capitalize">{retrievalType}</strong> retrieval. Selecting up to <strong className="text-accent-violet-light">{topK} chunks</strong>
+            {config.reranker_enabled ? " with nvidia/nemotron-3.5-rerank-8b reranker" : ""}.
+          </p>
         </div>
       </div>
     </div>

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useConfig }    from "../../hooks/useConfig";
 import { useDocument }  from "../../hooks/useDocument";
 import { useSession }   from "../../hooks/useSession";
@@ -25,6 +25,17 @@ export default function ConfigWizard() {
   const navigate = useNavigate();
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [pickerReloadToken, setPickerReloadToken] = useState(0);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const savingRef = useRef(false);
+  const isMountedRef = useRef(true);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
   const { config, step, updateChunking, updateEmbedding, updateRetrieval, updateLLM, updateMemory, applyPreset, nextStep, prevStep, goToStep, resetConfig } = useConfig();
   const { document, upload, uploading, uploadProgress, clearDocument, selectDocument } = useDocument();
   const { docId, docIds, filename, setDocId, setDocIds, setConfigId, setFilename } = useSession();
@@ -70,7 +81,10 @@ export default function ConfigWizard() {
 
   const handleComplete = async () => {
     const targetDocId = selectedDocIds[0] || document?.id;
-    if (!targetDocId) return;
+    if (!targetDocId || savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    setSaveError("");
     try {
       const fullConfig = {
         chunker:     config.chunker,
@@ -79,8 +93,8 @@ export default function ConfigWizard() {
         retriever:   config.retriever,
         reranker: {
           enabled:  config.retriever.reranker_enabled || false,
-          provider: config.retriever.reranker_provider || "huggingface_api",
-          model:    config.retriever.reranker_model    || "BAAI/bge-reranker-base",
+          provider: config.retriever.reranker_provider || "nvidia",
+          model:    config.retriever.reranker_model    || "nvidia/nemotron-3.5-rerank-8b",
         },
         llm:    { ...config.llm },
         memory: config.memory.type === "none" ? {} : config.memory,
@@ -90,13 +104,21 @@ export default function ConfigWizard() {
         name: "Custom Pipeline",
         config_json: fullConfig,
       });
+      if (!isMountedRef.current) return;
       setDocId(targetDocId);
       setConfigId(data.id);
       setFilename(filename || document?.filename || "Custom Pipeline");
       const docsParam = selectedDocIds.join(",");
       navigate(`/preview?doc=${targetDocId}&config=${data.id}&docs=${encodeURIComponent(docsParam)}`);
     } catch (e) {
-      alert(`Failed: ${e.response?.data?.detail || e.message}`);
+      if (isMountedRef.current) {
+        setSaveError(e.response?.data?.detail || e.message || "Failed to save pipeline configuration");
+      }
+    } finally {
+      savingRef.current = false;
+      if (isMountedRef.current) {
+        setSaving(false);
+      }
     }
   };
 
@@ -195,7 +217,8 @@ export default function ConfigWizard() {
             <button
               type="button"
               onClick={handleReset}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-zinc-700/80 bg-zinc-800/80 hover:bg-zinc-800 hover:border-zinc-600 text-zinc-300 hover:text-white text-xs font-semibold transition-all duration-200 cursor-pointer shadow-sm"
+              disabled={saving}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-zinc-700/80 bg-zinc-800/80 hover:bg-zinc-800 hover:border-zinc-600 text-zinc-300 hover:text-white text-xs font-semibold transition-all duration-200 cursor-pointer shadow-sm disabled:opacity-40"
               title="Reset pipeline and return to Step 1 (Upload Document)"
             >
               <IconRefresh size={12} className="text-amber-400" />
@@ -215,6 +238,12 @@ export default function ConfigWizard() {
         {stepComponents[step]}
       </div>
 
+      {saveError && (
+        <div className="rounded-lg border border-red-500/25 bg-red-500/10 p-3 text-xs text-red-300">
+          {saveError}
+        </div>
+      )}
+
       {/* Footer Navigation */}
       <div className="flex items-center justify-between pt-4 border-t border-zinc-800">
         <div className="flex items-center gap-3">
@@ -222,7 +251,7 @@ export default function ConfigWizard() {
             variant="secondary"
             size="sm"
             onClick={prevStep}
-            disabled={step === 0}
+            disabled={step === 0 || saving}
             leadingIcon={<IconArrowLeft size={12} />}
           >
             Back
@@ -231,7 +260,8 @@ export default function ConfigWizard() {
             <button
               type="button"
               onClick={handleReset}
-              className="inline-flex items-center gap-1 text-xs font-medium text-zinc-400 hover:text-amber-400 transition-colors cursor-pointer px-2 py-1 rounded hover:bg-white/[0.04]"
+              disabled={saving}
+              className="inline-flex items-center gap-1 text-xs font-medium text-zinc-400 hover:text-amber-400 transition-colors cursor-pointer px-2 py-1 rounded hover:bg-white/[0.04] disabled:opacity-40"
               title="Return directly to Step 1 (Upload Document)"
             >
               <IconRefresh size={11} />
@@ -248,15 +278,16 @@ export default function ConfigWizard() {
           <Button
             size="sm"
             onClick={handleComplete}
-            trailingIcon={<IconBuildPipeline size={12} />}
+            disabled={saving}
+            trailingIcon={!saving ? <IconBuildPipeline size={12} /> : null}
           >
-            Build & Preview Pipeline
+            {saving ? "Saving Pipeline…" : "Build & Preview Pipeline"}
           </Button>
         ) : (
           <Button
             size="sm"
             onClick={nextStep}
-            disabled={!canAdvance}
+            disabled={!canAdvance || saving}
             trailingIcon={<IconArrowRight size={12} />}
           >
             Next Step

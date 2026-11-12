@@ -7,6 +7,13 @@ from app.database import Base
 # --- SQLAlchemy Model ---
 
 class ChunkModel(Base):
+    """Legacy ORM table for chunks.
+
+    .. deprecated::
+        Chunk text, embeddings, and metadata are stored in Chroma / BM25 indexes.
+        Kept solely for backward metadata compatibility with existing schemas.
+    """
+
     __tablename__ = "chunks"
 
     id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)

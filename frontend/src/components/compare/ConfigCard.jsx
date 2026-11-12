@@ -71,7 +71,7 @@ export default function ConfigCard({ config, onAdd, isStaged, disabled }) {
           {config.reranker_enabled && (
             <div className="pt-1 border-t border-zinc-800/50 truncate">
               <span className="text-zinc-600 block text-[9px] uppercase">Reranker</span>
-              <span className="text-violet-400">{config.reranker_model || "bge-reranker"}</span>
+              <span className="text-violet-400">{config.reranker_model || "nvidia/nemotron-3.5-rerank-8b"}</span>
             </div>
           )}
         </div>

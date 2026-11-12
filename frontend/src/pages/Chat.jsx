@@ -7,7 +7,22 @@ import { Button, Badge } from "../components/common/index";
 import { getIndexStatus, prepareChatSession } from "../services/api";
 import { IconArrowLeft, IconSettings, IconArrowUpRight, IconDocument } from "../components/common/Icons";
 
-const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+const cancellableSleep = (ms, signal) =>
+  new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve(false);
+      return;
+    }
+    const timerId = window.setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve(true);
+    }, ms);
+    const onAbort = () => {
+      window.clearTimeout(timerId);
+      resolve(false);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 
 export default function Chat() {
   const [params] = useSearchParams();
@@ -27,7 +42,7 @@ export default function Chat() {
     : (sessionDocIds && sessionDocIds.length > 0 ? sessionDocIds : (docId ? [docId] : [])));
 
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
 
     const prepare = async () => {
       if (!docId || !configId) {
@@ -46,12 +61,16 @@ export default function Chat() {
           document_ids: effectiveDocIds,
           config_id: configId,
         });
+        if (controller.signal.aborted) return;
+
         const jobId = data?.job_id;
         if (jobId) {
           const startedAt = Date.now();
           const timeoutMs = 10 * 60 * 1000;
-          while (!cancelled) {
+          while (!controller.signal.aborted) {
             const statusResponse = await getIndexStatus(jobId);
+            if (controller.signal.aborted) return;
+
             const status = statusResponse?.data?.status || "pending";
             const progress = Number(statusResponse?.data?.progress_pct ?? 0);
             setPrepProgress(progress);
@@ -64,18 +83,19 @@ export default function Chat() {
             );
             if ((Date.now() - startedAt) > timeoutMs)
               throw new Error("Indexing operation timed out. Please retry.");
-            await sleep(1000);
+            const continued = await cancellableSleep(1000, controller.signal);
+            if (!continued) return;
           }
         }
       } catch (error) {
-        if (!cancelled)
+        if (!controller.signal.aborted)
           setPrepError(error?.response?.data?.detail || error?.message || "Failed to prepare session.");
       } finally {
-        if (!cancelled) setPreparing(false);
+        if (!controller.signal.aborted) setPreparing(false);
       }
     };
     void prepare();
-    return () => { cancelled = true; };
+    return () => { controller.abort(); };
   }, [docId, configId]);
 
   return (

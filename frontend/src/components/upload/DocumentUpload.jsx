@@ -1,12 +1,11 @@
-import React from 'react';
-import { useRef, useState } from "react";
+import React, { useRef, useState } from "react";
 import { ProgressBar } from "../common/index";
 import { useSession } from "../../hooks/useSession";
 
 const ACCEPTED = [".pdf", ".txt", ".epub"];
 
 export default function DocumentUpload({ document, onUpload, onClear, uploading, progress }) {
-  const { docId, filename, clear } = useSession();
+  const { docId, filename, setDocId, setDocIds, setConfigId, setFilename } = useSession();
   const inputRef  = useRef();
   const [dragOver, setDragOver] = useState(false);
 
@@ -21,12 +20,19 @@ export default function DocumentUpload({ document, onUpload, onClear, uploading,
 
   const handleChange = (e) => {
     const file = e.target.files[0];
+    e.target.value = "";
     if (file) onUpload(file);
   };
 
   const handleClear = () => {
-    clear();
-    onClear();
+    setDocId(null);
+    setDocIds([]);
+    setConfigId(null);
+    setFilename(null);
+    if (inputRef.current) {
+      inputRef.current.value = "";
+    }
+    onClear?.();
   };
 
   if (activeDoc) {
@@ -35,7 +41,7 @@ export default function DocumentUpload({ document, onUpload, onClear, uploading,
         <div className="text-3xl">✅</div>
         <p className="font-semibold text-green-800">{activeDoc.filename}</p>
         <p className="text-sm text-green-600">Ready. Click <strong>Next</strong> to configure chunking.</p>
-        <button onClick={handleClear} className="text-xs text-gray-400 underline mt-1">
+        <button type="button" onClick={handleClear} className="text-xs text-gray-400 underline mt-1">
           Upload a different file
         </button>
       </div>

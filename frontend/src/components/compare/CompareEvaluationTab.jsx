@@ -17,16 +17,17 @@ function formatPercent(val) {
 }
 
 export default function CompareEvaluationTab({ results, onOpenEvaluationDetail }) {
-  if (!results || results.length === 0) {
-    return (
-      <div className="rounded-2xl border border-dashed border-white/10 bg-surface-1/40 p-8 text-center text-sm text-zinc-400">
-        Run a comparison query to view evaluation metrics side-by-side.
-      </div>
-    );
-  }
-
-  // Calculate best performer for key dimensions
+  // Calculate best performer for key dimensions unconditionally before any early returns
   const highlights = useMemo(() => {
+    if (!Array.isArray(results) || results.length === 0) {
+      return {
+        bestFaithfulness: null,
+        bestRelevancy: null,
+        fastestLatency: null,
+        bestPrecision: null,
+      };
+    }
+
     let bestFaithfulness = { config: null, val: -1 };
     let bestRelevancy = { config: null, val: -1 };
     let fastestLatency = { config: null, val: Infinity };
@@ -62,6 +63,14 @@ export default function CompareEvaluationTab({ results, onOpenEvaluationDetail }
       bestPrecision: bestPrecision.config ? bestPrecision : null,
     };
   }, [results]);
+
+  if (!results || results.length === 0) {
+    return (
+      <div className="rounded-2xl border border-dashed border-white/10 bg-surface-1/40 p-8 text-center text-sm text-zinc-400">
+        Run a comparison query to view evaluation metrics side-by-side.
+      </div>
+    );
+  }
 
   const maxLatency = Math.max(...results.map((r) => Number(r.latency_ms || 1)), 1);
 

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Badge } from "../common/index";
 
 function scoreColor(score) {
@@ -16,6 +16,15 @@ function formatScore(value) {
 export default function ResultCard({ result, onOpenEvaluation }) {
   const [expandedChunks, setExpandedChunks] = useState({});
   const [copiedIndex, setCopiedIndex] = useState(null);
+  const copyTimerRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current) {
+        window.clearTimeout(copyTimerRef.current);
+      }
+    };
+  }, []);
 
   // Normalize chunks list from chunk_details or chunks array
   const rawChunks = Array.isArray(result.chunk_details) && result.chunk_details.length > 0
@@ -59,7 +68,13 @@ export default function ResultCard({ result, onOpenEvaluation }) {
   const copyChunkText = (text, idx) => {
     navigator.clipboard?.writeText(text);
     setCopiedIndex(idx);
-    setTimeout(() => setCopiedIndex(null), 1800);
+    if (copyTimerRef.current) {
+      window.clearTimeout(copyTimerRef.current);
+    }
+    copyTimerRef.current = window.setTimeout(() => {
+      setCopiedIndex(null);
+      copyTimerRef.current = null;
+    }, 1800);
   };
 
   const hasStalePdfPointer = rawChunks.some((c) => String(c.text || '').startsWith('pdf://'));

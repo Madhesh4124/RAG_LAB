@@ -454,8 +454,8 @@ async def run_single_config(
             import uuid
             reranker = get_reranker({
                 "type": "reranker",
-                "provider": getattr(config, "reranker_provider", "huggingface_api") or "huggingface_api",
-                "model": getattr(config, "reranker_model", "BAAI/bge-reranker-v2-m3") or "BAAI/bge-reranker-v2-m3",
+                "provider": getattr(config, "reranker_provider", "nvidia") or "nvidia",
+                "model": getattr(config, "reranker_model", "nvidia/nemotron-3.5-rerank-8b") or "nvidia/nemotron-3.5-rerank-8b",
             })
             if reranker:
                 chunk_tuples = []

@@ -317,35 +317,25 @@ class PipelineFactory:
             if retriever_cfg.get("reranker_enabled"):
                 reranker_cfg = {
                     "enabled": True,
-                    "provider": retriever_cfg.get("reranker_provider", "huggingface_api"),
-                    "model": retriever_cfg.get("reranker_model", "BAAI/bge-reranker-v2-m3"),
-                    "max_candidates": int(retriever_cfg.get("rerank_fetch_k", 6)),
+                    "provider": retriever_cfg.get("reranker_provider", "nvidia"),
+                    "model": retriever_cfg.get("reranker_model", "nvidia/nemotron-3.5-rerank-8b"),
+                    "max_candidates": int(retriever_cfg.get("rerank_fetch_k", 8)),
                     "min_candidates": int(retriever_cfg.get("min_candidates", 3)),
                 }
 
         if isinstance(reranker_cfg, dict) and reranker_cfg.get("enabled"):
-            provider = reranker_cfg.get("provider", "huggingface_api")
-            model_name = reranker_cfg.get("model", "BAAI/bge-reranker-v2-m3")
-            timeout_seconds = int(reranker_cfg.get("timeout_seconds", 5))
-            max_candidates = int(reranker_cfg.get("max_candidates", 6))
-            max_workers = int(reranker_cfg.get("max_workers", 4))
-            min_candidates = int(reranker_cfg.get("min_candidates", 3))
-
-            if provider in ("huggingface_api", "huggingface", "hf_api"):
-                from app.services.retrieval.reranker import HuggingFaceAPIReranker
-                reranker = HuggingFaceAPIReranker(
-                    model=model_name,
-                    timeout_seconds=timeout_seconds,
-                    max_candidates=max_candidates,
-                    max_workers=max_workers,
-                    min_candidates=min_candidates,
-                )
-            else:
-                from app.services.retrieval.reranker import CrossEncoderReranker
-                reranker = CrossEncoderReranker(model=model_name)
+            from app.services.retrieval.reranker import DEFAULT_NVIDIA_RERANK_MODEL, get_reranker
+            reranker = get_reranker({
+                "provider": reranker_cfg.get("provider", "nvidia"),
+                "model": reranker_cfg.get("model", DEFAULT_NVIDIA_RERANK_MODEL),
+                "timeout_seconds": int(reranker_cfg.get("timeout_seconds", 10)),
+                "max_candidates": int(reranker_cfg.get("max_candidates", 8)),
+                "max_workers": int(reranker_cfg.get("max_workers", 4)),
+                "min_candidates": int(reranker_cfg.get("min_candidates", 3)),
+            })
         elif reranker_cfg is True:
-            from app.services.retrieval.reranker import HuggingFaceAPIReranker
-            reranker = HuggingFaceAPIReranker()
+            from app.services.retrieval.reranker import NvidiaReranker
+            reranker = NvidiaReranker()
 
         return RAGPipeline(
             chunker=chunker,

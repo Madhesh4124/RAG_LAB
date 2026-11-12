@@ -4,7 +4,7 @@ import os
 import uuid
 from typing import List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.document_summary import DocumentSummary
@@ -98,8 +98,21 @@ class SummaryService:
             return existing
 
         generated = await SummaryService.generate_doc_summary(chunks, llm_client)
-        if not generated:
-            return existing if existing else None
+        if not generated or is_truncated(generated):
+            logger.warning(
+                "Summary regeneration did not yield a complete summary for doc_id=%s config_id=%s; skipping persistence.",
+                document_id,
+                config_id,
+            )
+            if existing:
+                await db.execute(
+                    delete(DocumentSummary).where(
+                        DocumentSummary.user_id == user_id,
+                        DocumentSummary.document_id == document_id,
+                        DocumentSummary.config_id == config_id,
+                    )
+                )
+            return None
 
         await SummaryService.upsert_summary(
             db=db,

@@ -25,23 +25,35 @@ const CHUNKER_DEFAULTS = {
   regex: { type: "regex", pattern: "\\n\\n+", min_chunk_size: 100 },
 };
 
+const DEFAULT_RETRIEVER = {
+  type: "hybrid",
+  retrieval_type: "hybrid",
+  top_k: 5,
+  similarity_threshold: 0.0,
+  alpha: 0.7,
+  lambda_mult: 0.5,
+  reranker_enabled: false,
+  reranker_provider: "nvidia",
+  reranker_model: "nvidia/nemotron-3.5-rerank-8b",
+};
+
 const DEFAULTS = {
   chunker:     CHUNKER_DEFAULTS.fixed_size,
   embedder:    { provider: "nvidia", model: "nvidia/nemotron-3-embed-1b" },
   vectorstore: { type: "chroma", collection_name: "my_collection" },
-  retriever:   { type: "hybrid", retrieval_type: "hybrid", top_k: 5, similarity_threshold: 0.0, alpha: 0.7, lambda_mult: 0.5, reranker_enabled: false, reranker_provider: "huggingface_api", reranker_model: "BAAI/bge-reranker-base" },
+  retriever:   { ...DEFAULT_RETRIEVER },
   llm:         { provider: "nvidia", model: "nvidia/nemotron-3.5-lightning-30b-a3b" },
   memory:      { type: "buffer", max_turns: 5, max_turns_before_summary: 5 },
 };
 
 const PRESETS = {
-  fast:     { ...DEFAULTS, chunker: { ...CHUNKER_DEFAULTS.fixed_size, chunk_size: 256, overlap: 20 }, retriever: { type: "hybrid", retrieval_type: "hybrid", top_k: 3, similarity_threshold: 0.0, alpha: 0.7, lambda_mult: 0.5, reranker_enabled: false, reranker_provider: "huggingface_api", reranker_model: "BAAI/bge-reranker-base" } },
+  fast:     { ...DEFAULTS, chunker: { ...CHUNKER_DEFAULTS.fixed_size, chunk_size: 256, overlap: 20 }, retriever: { ...DEFAULT_RETRIEVER, top_k: 3 } },
   balanced: { ...DEFAULTS },
-  accurate: { ...DEFAULTS, chunker: { ...CHUNKER_DEFAULTS.semantic, max_chunk_size: 1024, similarity_threshold: 0.7, overlap_sentences: 1 }, embedder: { provider: "google", model: "models/gemini-embedding-001" }, retriever: { type: "hybrid", retrieval_type: "hybrid", top_k: 7, similarity_threshold: 0.0, alpha: 0.7, lambda_mult: 0.5, reranker_enabled: true, reranker_provider: "huggingface_api", reranker_model: "BAAI/bge-reranker-base" } },
-  gemini:   { ...DEFAULTS, embedder: { provider: "google", model: "models/gemini-embedding-001" }, retriever: { type: "hybrid", retrieval_type: "hybrid", top_k: 5, similarity_threshold: 0.0, alpha: 0.7, lambda_mult: 0.5, reranker_enabled: false, reranker_provider: "huggingface_api", reranker_model: "BAAI/bge-reranker-base" } },
-  recursive: { ...DEFAULTS, chunker: { ...CHUNKER_DEFAULTS.recursive }, retriever: { type: "hybrid", retrieval_type: "hybrid", top_k: 5, similarity_threshold: 0.0, alpha: 0.7, lambda_mult: 0.5, reranker_enabled: false, reranker_provider: "huggingface_api", reranker_model: "BAAI/bge-reranker-base" } },
-  chapter: { ...DEFAULTS, chunker: { ...CHUNKER_DEFAULTS.chapter_based }, retriever: { type: "hybrid", retrieval_type: "hybrid", top_k: 5, similarity_threshold: 0.0, alpha: 0.7, lambda_mult: 0.5, reranker_enabled: false, reranker_provider: "huggingface_api", reranker_model: "BAAI/bge-reranker-base" } },
-  sentence_window: { ...DEFAULTS, chunker: { ...CHUNKER_DEFAULTS.sentence_window }, retriever: { type: "dense", retrieval_type: "dense", top_k: 5, similarity_threshold: 0.0, alpha: 0.7, lambda_mult: 0.5, reranker_enabled: false, reranker_provider: "huggingface_api", reranker_model: "BAAI/bge-reranker-base" } },
+  accurate: { ...DEFAULTS, chunker: { ...CHUNKER_DEFAULTS.semantic, max_chunk_size: 1024, similarity_threshold: 0.7, overlap_sentences: 1 }, embedder: { provider: "google", model: "models/gemini-embedding-001" }, retriever: { ...DEFAULT_RETRIEVER, top_k: 7, reranker_enabled: true } },
+  gemini:   { ...DEFAULTS, embedder: { provider: "google", model: "models/gemini-embedding-001" }, retriever: { ...DEFAULT_RETRIEVER } },
+  recursive: { ...DEFAULTS, chunker: { ...CHUNKER_DEFAULTS.recursive }, retriever: { ...DEFAULT_RETRIEVER } },
+  chapter: { ...DEFAULTS, chunker: { ...CHUNKER_DEFAULTS.chapter_based }, retriever: { ...DEFAULT_RETRIEVER } },
+  sentence_window: { ...DEFAULTS, chunker: { ...CHUNKER_DEFAULTS.sentence_window }, retriever: { ...DEFAULT_RETRIEVER, type: "dense", retrieval_type: "dense" } },
 };
 
 const CONFIG_STORAGE_KEY = "rag_lab_pipeline_config_v2";
@@ -54,6 +66,19 @@ function loadSavedConfig() {
     let cfg = parsed?.config || DEFAULTS;
     if (cfg.llm?.provider === "gemini" || cfg.llm?.model?.includes("gemini")) {
       cfg = { ...cfg, llm: { provider: "nvidia", model: "nvidia/nemotron-3.5-lightning-30b-a3b" } };
+    }
+    if (
+      cfg.retriever?.reranker_provider === "huggingface_api" ||
+      cfg.retriever?.reranker_model?.includes("bge-reranker")
+    ) {
+      cfg = {
+        ...cfg,
+        retriever: {
+          ...cfg.retriever,
+          reranker_provider: "nvidia",
+          reranker_model: "nvidia/nemotron-3.5-rerank-8b",
+        },
+      };
     }
     return {
       config: cfg,

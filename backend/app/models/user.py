@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from typing import Optional
 from pydantic import BaseModel, ConfigDict, EmailStr
-from sqlalchemy import Column, DateTime, String, Uuid, Boolean
+from sqlalchemy import Column, DateTime, Integer, String, Uuid, Boolean
 
 from app.database import Base
 
@@ -17,6 +17,7 @@ class User(Base):
     email = Column(String(255), nullable=False, unique=True, index=True)
     password_hash = Column(String(255), nullable=False)
     is_admin = Column(Boolean, nullable=False, default=False)
+    token_version = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     password_reset_count = Column(DateTime, nullable=True)  # Track last password reset for rate limiting
 

@@ -121,6 +121,8 @@ email_service = EmailService()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     startup_started = time.perf_counter()
+    app.state.migration_status = "pending"
+    app.state.migration_error = None
 
     if _env_flag("RUN_ALEMBIC_MIGRATIONS", "1"):
         phase_started = time.perf_counter()
@@ -132,11 +134,17 @@ async def lifespan(app: FastAPI):
         try:
             await asyncio.to_thread(alembic.command.upgrade, alembic_cfg, "head")
             _configure_app_logging()
+            app.state.migration_status = "ok"
             logger.info("Alembic migrations finished in %.2fms", (time.perf_counter() - phase_started) * 1000)
         except Exception as e:
             _configure_app_logging()
-            logger.error("Alembic migration failed: %s", e)
+            app.state.migration_status = "failed"
+            app.state.migration_error = str(e)
+            logger.exception("Alembic migration failed: %s", e)
+            if not _env_flag("ALLOW_MIGRATION_FAILURE", "0"):
+                raise RuntimeError(f"Alembic migration failed: {e}") from e
     else:
+        app.state.migration_status = "skipped"
         logger.info("Skipping database migrations.")
 
     if _env_flag("RUN_BOOTSTRAP_MIGRATIONS", "1"):
@@ -309,6 +317,13 @@ async def health_ready():
     except Exception as exc:
         logger.error("Health/ready: Chroma check failed: %s", exc)
         checks["chroma"] = f"error: {exc}"
+
+    migration_status = getattr(app.state, "migration_status", "ok")
+    migration_error = getattr(app.state, "migration_error", None)
+    if migration_status == "failed":
+        checks["migrations"] = f"error: {migration_error or 'alembic upgrade failed'}"
+    else:
+        checks["migrations"] = "ok"
 
     all_ok = all(v == "ok" for v in checks.values())
     status_code = status.HTTP_200_OK if all_ok else status.HTTP_503_SERVICE_UNAVAILABLE

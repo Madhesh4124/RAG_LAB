@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
 from sqlalchemy.exc import IntegrityError
 
 from app.models.evaluation import EvaluationResult
-from app.models.user import User
+from app.models.user import PasswordResetToken, User
 
 
 async def _column_exists(conn: AsyncConnection, table_name: str, column_name: str) -> bool:
@@ -65,11 +65,26 @@ async def _add_is_admin_if_missing(conn: AsyncConnection) -> None:
     await conn.execute(text(ddl))
 
 
+async def _add_token_version_if_missing(conn: AsyncConnection) -> None:
+    if await _column_exists(conn, "users", "token_version"):
+        return
+
+    ddl = "ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0"
+    await conn.execute(text(ddl))
+
+
 async def _create_evaluation_results_table_if_missing(conn: AsyncConnection) -> None:
     if await _table_exists(conn, EvaluationResult.__tablename__):
         return
 
     await conn.run_sync(lambda sync_conn: EvaluationResult.__table__.create(sync_conn, checkfirst=True))
+
+
+async def _create_password_reset_tokens_table_if_missing(conn: AsyncConnection) -> None:
+    if await _table_exists(conn, PasswordResetToken.__tablename__):
+        return
+
+    await conn.run_sync(lambda sync_conn: PasswordResetToken.__table__.create(sync_conn, checkfirst=True))
 
 
 async def _seed_admin_user(db: AsyncSession) -> User:
@@ -271,7 +286,9 @@ async def run_bootstrap_migrations(engine: AsyncEngine, db: AsyncSession) -> Non
 
         await _add_password_reset_count_if_missing(conn)
         await _add_is_admin_if_missing(conn)
+        await _add_token_version_if_missing(conn)
         await _create_evaluation_results_table_if_missing(conn)
+        await _create_password_reset_tokens_table_if_missing(conn)
 
     admin_user = await _seed_admin_user(db)
     admin_user_id = admin_user.id  # capture before next await expires the ORM object

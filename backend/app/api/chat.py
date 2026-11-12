@@ -3,6 +3,7 @@ import logging
 import os
 import uuid
 from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 from typing import Any, List
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Body
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -288,9 +289,17 @@ async def _run_indexing_background(
                     logger.warning("[job=%s] Summary precomputation during indexing failed: %s", job_id, sum_exc)
 
         IndexingJobStore.update(job_id, status="ready", progress_pct=100)
+    except asyncio.CancelledError:
+        logger.warning("[job=%s] Indexing task cancelled", job_id)
+        IndexingJobStore.update(job_id, status="failed", error="Indexing task cancelled")
+        raise
     except Exception as exc:
         logger.exception("[job=%s] Indexing failed: %s", job_id, exc)
         IndexingJobStore.update(job_id, status="failed", error=str(exc))
+    finally:
+        job = IndexingJobStore.get(job_id)
+        if job and job.status in ("pending", "indexing"):
+            IndexingJobStore.update(job_id, status="failed", error="Indexing terminated unexpectedly")
 
 
 @router.post("/prepare")
@@ -337,10 +346,27 @@ async def prepare_chat_session(
         vectorstore_cfg["type"] = "chroma"
         pipeline_config["vectorstore"] = vectorstore_cfg
 
-    # --- P2.1: Create job and fire background indexing -----------------------
+    # --- P2.1: Deduplicate active job or create and fire background indexing ---
+    doc_key = ",".join(sorted(str(item) for item in normalized_doc_ids))
+    existing_job = IndexingJobStore.find_active_job(
+        user_id=str(current_user.id),
+        config_id=str(payload.config_id),
+        doc_key=doc_key,
+    )
+    if existing_job is not None:
+        return {
+            "status": existing_job.status,
+            "job_id": existing_job.job_id,
+            "document_id": str(payload.document_id),
+            "document_ids": [str(item) for item in normalized_doc_ids],
+            "config_id": str(payload.config_id),
+        }
+
     job_id = IndexingJobStore.create(
         doc_id=str(payload.document_id),
         config_id=str(payload.config_id),
+        user_id=str(current_user.id),
+        doc_key=doc_key,
     )
 
     # Eagerly snapshot doc data so the background task doesn't touch the DB session.
@@ -355,26 +381,11 @@ async def prepare_chat_session(
     )
     # -------------------------------------------------------------------------
 
-    if should_precompute_summaries():
-        for doc in docs:
-            summary_text = doc.content
-            if doc.file_type.lower() == "pdf":
-                summary_text = FileProcessor.extract_pdf_text_fallback(doc.content, doc.filename)
-            background_tasks.add_task(
-                _precompute_summary_background,
-                user_id=current_user.id,
-                doc_id=doc.id,
-                config_id=config.id,
-                doc_content=summary_text,
-                doc_filename=doc.filename,
-                doc_file_type=doc.file_type,
-                pipeline_config=pipeline_config,
-            )
-
     await db.commit()
 
+    created_job = IndexingJobStore.get(job_id)
     return {
-        "status": "indexing",
+        "status": created_job.status if created_job else "pending",
         "job_id": job_id,
         "document_id": str(payload.document_id),
         "document_ids": [str(item) for item in normalized_doc_ids],
@@ -449,6 +460,7 @@ async def chat_endpoint(
         )
 
         query_mode = classify_query(query)
+        used_fallback = False
         logger.info("Chat query classified config_id=%s mode=%s", config_id, query_mode)
 
         if query_mode == "global":
@@ -497,6 +509,7 @@ async def chat_endpoint(
                         )
                     await rate_limiter.record_call(scope_key, "llm", current_user.id)
                 else:
+                    used_fallback = True
                     answer = _fallback_answer_from_chunks(query, retrieved_chunks_only)
                 timer.stop("llm_time_ms")
         else:
@@ -543,6 +556,7 @@ async def chat_endpoint(
                     exc,
                     exc_info=True,
                 )
+                used_fallback = True
                 answer = _fallback_answer_from_chunks(query, retrieved_chunks_only)
             finally:
                 timer.stop("llm_time_ms")
@@ -554,12 +568,16 @@ async def chat_endpoint(
 
     retrieved_chunks = _serialize_retrieved_chunks(retrieved_results if 'retrieved_results' in locals() else [])
 
+    user_ts = datetime.now(timezone.utc)
+    assistant_ts = user_ts + timedelta(milliseconds=1)
+
     user_msg = ChatMessage(
         user_id=current_user.id,
         document_id=doc_id,
         config_id=config_id,
         role="user",
         content=query,
+        timestamp=user_ts,
         retrieved_chunks=None
     )
     db.add(user_msg)
@@ -570,6 +588,7 @@ async def chat_endpoint(
         config_id=config_id,
         role="assistant",
         content=answer,
+        timestamp=assistant_ts,
         retrieved_chunks=retrieved_chunks
     )
     db.add(assistant_msg)
@@ -593,17 +612,18 @@ async def chat_endpoint(
     db.add(metrics_record)
 
     llm_client = getattr(pipeline, "llm_client", None)
-    try:
-        score_message(
-            db=db,
-            assistant_msg=assistant_msg,
-            query_text=query,
-            llm_client=llm_client,
-            chunks=_chunks_from_payload(retrieved_chunks),
-        )
-    except Exception:
-        # Evaluation should not block normal chat responses.
-        pass
+    if not used_fallback:
+        try:
+            score_message(
+                db=db,
+                assistant_msg=assistant_msg,
+                query_text=query,
+                llm_client=llm_client,
+                chunks=_chunks_from_payload(retrieved_chunks),
+            )
+        except Exception:
+            # Evaluation should not block normal chat responses.
+            pass
 
     await db.commit()
     await db.refresh(assistant_msg)
@@ -612,7 +632,8 @@ async def chat_endpoint(
         "answer": answer,
         "retrieved_chunks": retrieved_chunks,
         "timings": response_timings,
-        "message_id": assistant_msg.id
+        "message_id": assistant_msg.id,
+        "degraded": used_fallback,
     }
 
 from fastapi.responses import StreamingResponse
@@ -628,11 +649,6 @@ async def chat_stream_endpoint(
 ):
     """Streaming version for better perceived latency."""
     from app.services.pipeline_manager import PipelineManager
-    # Check rate limit for LLM calls using a short-lived DB session.
-    scope_key = f"user:{current_user.id}"
-    async with AsyncSessionLocal() as limiter_db:
-        limiter = DatabaseRateLimiter(limiter_db)
-        await limiter.enforce_rate_limit(scope_key, "llm")
 
     requested_ids = doc_ids or [doc_id]
     normalized_ids = []
@@ -648,12 +664,35 @@ async def chat_stream_endpoint(
         RAGConfig.id == config_id,
         RAGConfig.user_id == current_user.id,
     )
+    query_mode = classify_query(query)
+    cached_summary = None
     async with AsyncSessionLocal() as read_db:
         docs = (await read_db.execute(doc_stmt)).scalars().all()
         config = (await read_db.execute(cfg_stmt)).scalars().first()
-    
+        if docs and config and query_mode == "global":
+            cached_summary = await SummaryService.get_summary(
+                db=read_db,
+                user_id=current_user.id,
+                document_id=doc_id,
+                config_id=config_id,
+            )
+            if cached_summary and is_truncated(cached_summary):
+                logger.warning(
+                    "Cached summary for doc_id=%s appears truncated (%r); discarding and regenerating.",
+                    doc_id,
+                    cached_summary[-40:] if len(cached_summary) > 40 else cached_summary,
+                )
+                cached_summary = None
+
     if not docs or not config:
         raise HTTPException(status_code=404, detail="Resource not found")
+
+    # Align with /api/chat: skip LLM rate limit on valid cached global summary hits.
+    scope_key = f"user:{current_user.id}"
+    if query_mode != "global" or not cached_summary:
+        async with AsyncSessionLocal() as limiter_db:
+            limiter = DatabaseRateLimiter(limiter_db)
+            await limiter.enforce_rate_limit(scope_key, "llm")
 
     logger.info(
         "Streaming chat request received user_id=%s doc_ids=%s config_id=%s query=%r",
@@ -675,7 +714,6 @@ async def chat_stream_endpoint(
     top_k = int(retrieval_cfg.get("top_k", 5))
     similarity_threshold = float(retrieval_cfg.get("similarity_threshold", 0.0))
     llm_client = getattr(pipeline, "llm_client", None)
-    query_mode = classify_query(query)
     logger.info(
         "Streaming chat pipeline ready config_id=%s query_mode=%s top_k=%s threshold=%s llm_client=%s llm_ready=%s llm_config=%s",
         config_id,
@@ -688,13 +726,23 @@ async def chat_stream_endpoint(
     )
 
     async def event_generator():
+        llm_used = False
+        used_fallback = False
+        usage_recorded = False
+
+        async def _record_llm_usage_once() -> None:
+            nonlocal usage_recorded
+            if not llm_used or usage_recorded:
+                return
+            usage_recorded = True
+            try:
+                async with AsyncSessionLocal() as limiter_db:
+                    limiter = DatabaseRateLimiter(limiter_db)
+                    await limiter.record_call(scope_key, "llm", current_user.id)
+            except Exception:
+                logger.warning("Failed to record streamed LLM usage for user_id=%s", current_user.id, exc_info=True)
+
         try:
-            # 1. Notify immediately
-            # yield f"data: {json.dumps({'type': 'status', 'message': f'Active on {len(docs)} document(s)…'})}\n\n"
-            # No longer re-indexing here as it should be handled in /prepare
-
-            llm_used = False
-
             if query_mode == "global":
                 _msg2 = json.dumps({'type': 'status', 'message': 'Loading document summary and citations…'})
                 yield f"data: {_msg2}\n\n"
@@ -708,22 +756,7 @@ async def chat_stream_endpoint(
                     results = filtered if filtered else results
                 chunks = [res[0] if isinstance(res, tuple) else res for res in results]
 
-                async with AsyncSessionLocal() as summary_db:
-                    summary_text = await SummaryService.get_summary(
-                        db=summary_db,
-                        user_id=current_user.id,
-                        document_id=doc_id,
-                        config_id=config_id,
-                    )
-
-                if summary_text and is_truncated(summary_text):
-                    logger.warning(
-                        "Cached summary for doc_id=%s appears truncated (%r); discarding and regenerating.",
-                        doc_id,
-                        summary_text[-40:] if len(summary_text) > 40 else summary_text,
-                    )
-                    summary_text = None
-
+                summary_text = cached_summary
                 if not summary_text:
                     _msg3 = json.dumps({'type': 'status', 'message': 'Synthesizing document overview…'})
                     yield f"data: {_msg3}\n\n"
@@ -748,6 +781,7 @@ async def chat_stream_endpoint(
                         summary_text = generated_summary
                         llm_used = True
                     else:
+                        used_fallback = True
                         summary_text = _fallback_answer_from_chunks(query, chunks)
 
                 chunk_meta = _serialize_retrieved_chunks(results)
@@ -794,26 +828,28 @@ async def chat_stream_endpoint(
                         exc,
                         exc_info=True,
                     )
+                    used_fallback = True
                     full_response = _fallback_answer_from_chunks(query, chunks)
                     yield f"data: {json.dumps({'type': 'token', 'content': full_response})}\n\n"
 
             # Record successful LLM call in a short-lived session.
-            if llm_used:
-                async with AsyncSessionLocal() as limiter_db:
-                    limiter = DatabaseRateLimiter(limiter_db)
-                    await limiter.record_call(scope_key, "llm", current_user.id)
+            await _record_llm_usage_once()
 
             assistant_message_id = None
+            persist_error = None
 
             # 4. Persist to DB
             try:
                 async with AsyncSessionLocal() as write_db:
+                    user_ts = datetime.now(timezone.utc)
+                    assistant_ts = user_ts + timedelta(milliseconds=1)
                     user_msg = ChatMessage(
                         user_id=current_user.id,
                         document_id=doc_id,
                         config_id=config_id,
                         role="user",
                         content=query,
+                        timestamp=user_ts,
                     )
                     write_db.add(user_msg)
                     assistant_msg = ChatMessage(
@@ -822,20 +858,42 @@ async def chat_stream_endpoint(
                         config_id=config_id,
                         role="assistant",
                         content=full_response,
+                        timestamp=assistant_ts,
                         retrieved_chunks=chunk_meta,
                     )
                     write_db.add(assistant_msg)
                     await write_db.commit()
                     await write_db.refresh(assistant_msg)
                     assistant_message_id = str(assistant_msg.id)
-            except Exception:
-                pass
+            except Exception as exc:
+                persist_error = str(exc)
+                logger.exception(
+                    "Failed to persist streamed chat messages doc_id=%s config_id=%s user_id=%s",
+                    doc_id,
+                    config_id,
+                    current_user.id,
+                )
 
-            # Notify UI only after the message is safely persisted so evaluation can load it.
-            yield f"data: {json.dumps({'type': 'done', 'message_id': assistant_message_id})}\n\n"
+            done_payload = {
+                "type": "done",
+                "message_id": assistant_message_id,
+                "persisted": assistant_message_id is not None,
+                "degraded": used_fallback,
+            }
+            if persist_error is not None:
+                done_payload["warning"] = "Response generated, but saving to chat history failed."
+
+            # Notify UI only after the persistence attempt so evaluation knows whether it was saved.
+            yield f"data: {json.dumps(done_payload)}\n\n"
 
         except asyncio.CancelledError:
-            # Client disconnected mid-stream.
+            # Client disconnected mid-stream: record partial LLM usage if tokens/summary ran.
+            if llm_used and not usage_recorded:
+                record_task = asyncio.ensure_future(_record_llm_usage_once())
+                try:
+                    await asyncio.shield(record_task)
+                except asyncio.CancelledError:
+                    pass
             raise
         except Exception as e:
             logger.exception("Stream generator error: %s", str(e))
@@ -859,13 +917,64 @@ async def reset_system(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Resets memory, deletes history, and clears vectordb collections."""
+    """Resets memory, deletes config-scoped history/summary, invalidates pipeline cache, and clears vector indices."""
+    from pathlib import Path
     from sqlalchemy import delete
-    import shutil
-    import os
-    
-    # 2. Clear Database conversation history for this document
-    await db.execute(delete(ChatMessage).where(ChatMessage.document_id == doc_id, ChatMessage.user_id == current_user.id))
+    from app.models.document_summary import DocumentSummary
+    from app.services.pipeline_manager import PipelineManager
+    from app.services.vectorstore.chroma_store import ChromaStore
+
+    cfg_stmt = select(RAGConfig).where(RAGConfig.id == config_id, RAGConfig.user_id == current_user.id)
+    config = (await db.execute(cfg_stmt)).scalars().first()
+    if not config:
+        raise HTTPException(status_code=404, detail="Config not found")
+
+    # 1. Clear config-scoped chat history and cached summary for this user + document
+    msg_res = await db.execute(
+        delete(ChatMessage).where(
+            ChatMessage.document_id == doc_id,
+            ChatMessage.config_id == config_id,
+            ChatMessage.user_id == current_user.id,
+        )
+    )
+    await db.execute(
+        delete(DocumentSummary).where(
+            DocumentSummary.document_id == doc_id,
+            DocumentSummary.config_id == config_id,
+            DocumentSummary.user_id == current_user.id,
+        )
+    )
     await db.commit()
-    
-    return {"status": "success", "message": "System reset complete."}
+
+    # 2. Clear cached pipeline/memory and invalidate cache entry
+    cache_key = f"{current_user.id}:{config_id}"
+    cached_entry = PipelineManager._cache.get(cache_key)
+    if cached_entry is not None:
+        memory = getattr(cached_entry.pipeline, "memory", None)
+        if memory is not None and hasattr(memory, "clear"):
+            try:
+                memory.clear()
+            except Exception:
+                logger.warning("Failed to clear pipeline memory during reset for key=%s", cache_key, exc_info=True)
+    PipelineManager.invalidate(cache_key)
+
+    # 3. Clear Chroma document vectors & BM25 disk cache for this user/config
+    collection_name = f"user_{current_user.id}_rag_cfg_{config_id}"
+    try:
+        store = ChromaStore(collection_name=collection_name)
+        await asyncio.to_thread(store.delete_document, str(doc_id))
+    except Exception as exc:
+        logger.warning("Reset could not clear Chroma collection=%s doc_id=%s: %s", collection_name, doc_id, exc)
+
+    try:
+        bm25_cache = Path(os.getenv("CHROMA_PERSIST_DIR", "./chroma_db")) / f"bm25_{collection_name}.json"
+        bm25_cache.unlink(missing_ok=True)
+    except Exception as exc:
+        logger.warning("Reset could not remove BM25 cache for collection=%s: %s", collection_name, exc)
+
+    deleted_count = msg_res.rowcount if getattr(msg_res, "rowcount", None) is not None else 0
+    return {
+        "status": "success",
+        "message": "System reset complete.",
+        "deleted_messages": deleted_count,
+    }

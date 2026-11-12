@@ -183,3 +183,178 @@ async def test_build_message_evaluation_report_raises_429(async_db_session, user
     assert "quota limit exceeded" in str(exc_info.value)
 
 
+@pytest.mark.anyio
+async def test_evaluate_faithfulness_alias_injects_current_user(async_db_session, user_a, sample_config_and_chat, monkeypatch):
+    import httpx
+    from fastapi import FastAPI
+    from app.api.evaluation import router as evaluation_router
+    from app.auth import get_current_user
+    from app.database import get_db
+    from app.models.evaluation import EvaluationResult
+
+    cfg, msg = sample_config_and_chat
+
+    user_msg = ChatMessage(
+        user_id=user_a.id,
+        document_id=msg.document_id,
+        config_id=cfg.id,
+        role="user",
+        content="What is the deadline?",
+        timestamp=msg.timestamp - datetime.timedelta(seconds=5),
+    )
+    async_db_session.add(user_msg)
+    await async_db_session.commit()
+
+    class MockPipeline:
+        llm_client = None
+
+    monkeypatch.setattr(PipelineFactory, "create_pipeline", lambda cfg_json: MockPipeline())
+
+    def fake_score_message(db, assistant_msg, query_text, llm_client, chunks):
+        res = EvaluationResult(
+            message_id=assistant_msg.id,
+            faithfulness=0.91,
+            answer_relevancy=0.88,
+            context_precision=0.8,
+            context_recall=0.75,
+        )
+        db.add(res)
+        return res
+
+    monkeypatch.setattr("app.api.evaluation.score_message", fake_score_message)
+
+    test_app = FastAPI()
+    test_app.include_router(evaluation_router)
+    test_app.dependency_overrides[get_db] = lambda: async_db_session
+    test_app.dependency_overrides[get_current_user] = lambda: user_a
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=test_app), base_url="http://test") as client:
+        resp = await client.post("/api/evaluation/faithfulness", json={"message_id": str(msg.id)})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["message_id"] == str(msg.id)
+    assert body["faithfulness"] == 0.91
+    assert body["answer_relevancy"] == 0.88
+    assert body["context_precision"] == 0.8
+    assert body["context_recall"] == 0.75
+
+
+def test_evaluate_faithfulness_alias_requires_auth():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.evaluation import router as evaluation_router
+
+    test_app = FastAPI()
+    test_app.include_router(evaluation_router)
+
+    with TestClient(test_app) as client:
+        resp = client.post("/api/evaluation/faithfulness", json={"message_id": "00000000-0000-0000-0000-000000000001"})
+
+    assert resp.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_score_message_does_not_persist_all_none_result(async_db_session, sample_config_and_chat, monkeypatch):
+    from types import SimpleNamespace
+    from sqlalchemy import select
+    from app.api.evaluation import score_message
+    from app.models.evaluation import EvaluationResult
+
+    _, msg = sample_config_and_chat
+
+    monkeypatch.setattr(FaithfulnessEvaluator, "evaluate", lambda *a, **kw: None)
+    monkeypatch.setattr(AnswerRelevancyEvaluator, "evaluate", lambda *a, **kw: None)
+    monkeypatch.setattr(ContextQualityEvaluator, "evaluate", lambda *a, **kw: {})
+
+    fake_llm = SimpleNamespace(llm=object())
+    with pytest.raises(EvaluationServiceUnavailableError):
+        score_message(
+            db=async_db_session,
+            assistant_msg=msg,
+            query_text="What is this about?",
+            llm_client=fake_llm,
+            chunks=[],
+        )
+
+    rows = (
+        await async_db_session.execute(
+            select(EvaluationResult).where(EvaluationResult.message_id == msg.id)
+        )
+    ).scalars().all()
+    assert rows == []
+
+
+@pytest.mark.anyio
+async def test_score_message_by_id_rejects_degraded_fallback_answer(async_db_session, user_a, sample_config_and_chat):
+    from app.api.evaluation import EvaluationBadRequestError, score_message_by_id
+
+    cfg, msg = sample_config_and_chat
+    msg.content = "LLM is temporarily unavailable, so this answer is based directly on retrieved chunks.\nQuestion: hi"
+    user_msg = ChatMessage(
+        user_id=user_a.id,
+        document_id=msg.document_id,
+        config_id=cfg.id,
+        role="user",
+        content="hi",
+        timestamp=msg.timestamp - datetime.timedelta(seconds=5),
+    )
+    async_db_session.add(user_msg)
+    await async_db_session.commit()
+
+    with pytest.raises(EvaluationBadRequestError) as exc_info:
+        await score_message_by_id(db=async_db_session, message_id=msg.id, user_id=user_a.id)
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_chat_endpoint_skips_scoring_on_llm_fallback_and_marks_degraded(
+    async_db_session, user_a, sample_config_and_chat, monkeypatch
+):
+    from types import SimpleNamespace
+    from app.api.chat import chat_endpoint
+    from app.models.metrics import Metrics
+    from app.services.pipeline_manager import PipelineManager
+
+    Metrics.__table__.create(bind=async_db_session._sync.get_bind(), checkfirst=True)
+    cfg, _ = sample_config_and_chat
+
+    class _FakeLimiter:
+        def build_scope_key(self, user_id):
+            return f"user:{user_id}"
+
+        async def enforce_rate_limit(self, scope_key, op):
+            return None
+
+        async def record_call(self, scope_key, op, user_id):
+            return None
+
+    class _FailingPipeline:
+        llm_client = SimpleNamespace(llm=object())
+
+        async def aretrieve(self, query, top_k=5):
+            return [(Chunk(id="c1", text="Relevant fact in document.", metadata={}), 0.85)]
+
+        async def agenerate(self, query, chunks):
+            raise RuntimeError("upstream LLM timeout")
+
+    score_calls = []
+    monkeypatch.setattr("app.api.chat.classify_query", lambda _q: "local")
+    monkeypatch.setattr(PipelineManager, "get_pipeline", classmethod(lambda cls, k, c: _FailingPipeline()))
+    monkeypatch.setattr("app.api.evaluation.score_message", lambda **kw: score_calls.append(kw))
+
+    resp = await chat_endpoint(
+        query="What is the relevant fact?",
+        doc_id=cfg.document_id,
+        config_id=cfg.id,
+        current_user=user_a,
+        db=async_db_session,
+        rate_limiter=_FakeLimiter(),
+    )
+    assert resp["degraded"] is True
+    assert "LLM is temporarily unavailable" in resp["answer"]
+    assert score_calls == []
+
+
+
+

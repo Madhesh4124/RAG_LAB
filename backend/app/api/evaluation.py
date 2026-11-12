@@ -60,6 +60,19 @@ def _is_missing_evaluation_table(exc: Exception) -> bool:
     return "no such table: evaluation_results" in message
 
 
+def is_degraded_fallback_answer(content: Optional[str]) -> bool:
+    text = (content or "").strip()
+    if not text:
+        return True
+    markers = (
+        "LLM is temporarily unavailable",
+        "LLM generation failed:",
+        "(LLM unavailable)",
+        "Unable to generate an answer right now",
+    )
+    return any(marker in text for marker in markers)
+
+
 class EvaluationReportRequest(BaseModel):
     message_id: Optional[uuid.UUID] = None
     query: Optional[str] = None
@@ -163,12 +176,17 @@ def score_message(
         logger.warning("Context quality evaluation failed for message_id=%s", assistant_msg.id, exc_info=True)
         context_quality = {}
 
+    context_precision = context_quality.get("context_precision")
+    context_recall = context_quality.get("context_recall")
+    if all(v is None for v in (faithfulness, answer_relevancy, context_precision, context_recall)):
+        raise EvaluationServiceUnavailableError("All evaluation metrics failed to compute; no result recorded.")
+
     result = EvaluationResult(
         message_id=assistant_msg.id,
         faithfulness=faithfulness,
         answer_relevancy=answer_relevancy,
-        context_precision=context_quality.get("context_precision"),
-        context_recall=context_quality.get("context_recall"),
+        context_precision=context_precision,
+        context_recall=context_recall,
     )
     db.add(result)
     return result
@@ -342,6 +360,7 @@ async def build_message_evaluation_report(
 
     report["message_id"] = str(msg.id)
     report["mode"] = "message-deep" if deep else "message-fast"
+    report["degraded"] = is_degraded_fallback_answer(msg.content)
     answer_metrics = report.get("answer_metrics", {})
     if deep:
         if unified_result is not None:
@@ -405,6 +424,8 @@ async def score_message_by_id(db: AsyncSession, message_id: uuid.UUID, user_id: 
         raise EvaluationNotFoundError("Message not found")
     if msg.role != "assistant":
         raise EvaluationBadRequestError("Scoring is only available for assistant messages")
+    if is_degraded_fallback_answer(msg.content):
+        raise EvaluationBadRequestError("Cannot score a degraded fallback response where LLM generation failed.")
 
     query_stmt = (
         select(ChatMessage)
@@ -474,9 +495,10 @@ async def evaluate_score(
 @router.post("/faithfulness")
 async def evaluate_faithfulness_alias(
     message_id: uuid.UUID = Body(..., embed=True),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    return await evaluate_score(message_id=message_id, db=db)
+    return await evaluate_score(message_id=message_id, current_user=current_user, db=db)
 
 
 @router.post("/report")

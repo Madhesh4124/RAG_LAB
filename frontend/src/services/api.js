@@ -15,13 +15,22 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+export const AUTH_EXPIRED_EVENT = "raglab:auth-expired";
+
+export function notifyAuthExpired() {
+  localStorage.removeItem("raglab_token");
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT));
+  }
+}
+
 api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error?.response?.status === 401) {
       const url = error.config?.url || "";
       if (!url.includes("/api/auth/login")) {
-        localStorage.removeItem("raglab_token");
+        notifyAuthExpired();
       }
     }
     return Promise.reject(error);

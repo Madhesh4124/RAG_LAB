@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import MessageList from "./MessageList";
 import InputBox from "./InputBox";
-import { BASE_URL } from "../../services/api";
+import { BASE_URL, notifyAuthExpired } from "../../services/api";
 import EvaluationPanel from "../evaluation/EvaluationPanel";
 import { getEvaluationReport } from "../../services/api";
 import { IconChartLine, IconRefresh, IconSparkle } from "../common/Icons";
@@ -36,6 +36,7 @@ export default function ChatInterface({ docId, docIds = [], configId }) {
           method: "GET",
           headers: { ...getAuthHeaders() },
         });
+        if (response.status === 401) { notifyAuthExpired(); return; }
         if (!response.ok) return;
         const rows = await response.json();
         if (cancelled || !Array.isArray(rows)) return;
@@ -74,6 +75,10 @@ export default function ChatInterface({ docId, docIds = [], configId }) {
         headers: { "Content-Type": "application/json", ...getAuthHeaders() },
         body: JSON.stringify({ query, doc_id: docId, doc_ids: docIds, config_id: configId }),
       });
+      if (response.status === 401) {
+        notifyAuthExpired();
+        throw new Error("Session expired. Please sign in again.");
+      }
       if (!response.ok) throw new Error("Stream connection failed");
 
       const reader = response.body.getReader();
@@ -99,7 +104,11 @@ export default function ChatInterface({ docId, docIds = [], configId }) {
               assistantMsg = { ...assistantMsg, content: `${assistantMsg.content}\n\n[Error] ${data.message || "Unknown error"}`.trim(), status: "" };
               streamDone = true; setLoading(false);
             } else if (data.type === "done") {
-              assistantMsg = { ...assistantMsg, id: data.message_id || assistantMsg.id, status: "" };
+              assistantMsg = {
+                ...assistantMsg,
+                id: data.message_id || assistantMsg.id,
+                status: data.persisted === false ? (data.warning || "Response generated, but saving to chat history failed.") : "",
+              };
               streamDone = true; setLoading(false);
             }
             setMessages((prev) => { const next = [...prev]; next[next.length - 1] = { ...assistantMsg }; return next; });
@@ -122,11 +131,16 @@ export default function ChatInterface({ docId, docIds = [], configId }) {
     if (!window.confirm("Clear all conversation history and vector indices for this session?")) return;
     try {
       setLoading(true);
-      await fetch(`${BASE_URL}/api/chat/reset`, {
+      const resetResp = await fetch(`${BASE_URL}/api/chat/reset`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...getAuthHeaders() },
         body: JSON.stringify({ doc_id: docId, config_id: configId }),
       });
+      if (resetResp.status === 401) {
+        notifyAuthExpired();
+        throw new Error("Session expired. Please sign in again.");
+      }
+      if (!resetResp.ok) throw new Error("Reset failed");
       setMessages([]);
     } catch (e) { alert(`Reset failed: ${e.message}`); }
     finally { setLoading(false); }

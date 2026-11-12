@@ -2,7 +2,9 @@ import uuid
 import os
 import logging
 from copy import deepcopy
-from typing import List, Optional
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -14,6 +16,7 @@ from app.models.document import Document
 from app.models.rag_config import RAGConfig
 from app.models.chat import ChatMessage
 from app.models.metrics import Metrics
+from app.compare.schemas import RAGConfig as CompareRAGConfig
 from app.services.pipeline_factory import PipelineFactory
 from app.utils.timing import PipelineTimer
 from app.compare.compare_runner import _summarize_compare_context
@@ -23,6 +26,40 @@ from app.utils.file_processor import FileProcessor
 
 router = APIRouter(prefix="/api/compare", tags=["compare"])
 logger = logging.getLogger(__name__)
+
+
+def _to_compare_schema(config: RAGConfig, document_id: uuid.UUID, user_id: uuid.UUID) -> Any:
+    cfg_json = deepcopy(config.config_json or {})
+    chunker = cfg_json.get("chunker", {}) or {}
+    embedder = cfg_json.get("embedder", {}) or {}
+    retriever = cfg_json.get("retriever", {}) or {}
+    reranker = cfg_json.get("reranker", {}) or {}
+    vectorstore = cfg_json.get("vectorstore", {}) or {}
+
+    payload = {
+        "name": config.name or str(config.id),
+        "chunk_strategy": chunker.get("strategy") or chunker.get("type") or "recursive",
+        "chunk_params": {k: v for k, v in chunker.items() if k not in ("strategy", "type")},
+        "embedding_provider": embedder.get("provider") or "nvidia",
+        "embedding_model": embedder.get("model") or "",
+        "top_k": max(1, min(10, int(retriever.get("top_k", 5)))),
+        "threshold": float(
+            retriever.get("similarity_threshold")
+            if retriever.get("similarity_threshold") is not None
+            else retriever.get("threshold", 0.5)
+        ),
+        "collection_name": vectorstore.get("collection_name") or f"user_{user_id}_rag_cfg_{config.id}",
+        "retrieval_type": retriever.get("type") or retriever.get("retrieval_type") or "hybrid",
+        "alpha": float(retriever.get("alpha", 0.7)),
+        "lambda_mult": float(retriever.get("lambda_mult", 0.5)),
+        "reranker_enabled": bool(reranker.get("enabled", False)),
+        "reranker_model": reranker.get("model"),
+        "reranker_provider": reranker.get("provider"),
+    }
+    try:
+        return CompareRAGConfig(**payload)
+    except Exception:
+        return SimpleNamespace(**payload, document_id=str(document_id))
 
 
 @router.post("")
@@ -133,10 +170,16 @@ async def compare_configs(
 
             if query_mode == "global":
                 timer.start("retrieval_time_ms")
+                raw_vs = (
+                    pipeline.vectorstore._get_vectorstore(pipeline.embedder)
+                    if hasattr(pipeline.vectorstore, "_get_vectorstore")
+                    else pipeline.vectorstore
+                )
+                compare_cfg = _to_compare_schema(config, document_id, current_user.id)
                 summary, fallback_results, fallback_chunks = await _summarize_compare_context(
                     query=query,
-                    config=config,
-                    vectorstore=pipeline.vectorstore._get_vectorstore(pipeline.embedder),
+                    config=compare_cfg,
+                    vectorstore=raw_vs,
                     llm=pipeline.llm_client.llm if pipeline.llm_client and getattr(pipeline.llm_client, "llm", None) else None,
                     user_scope=str(current_user.id),
                     db=db,
@@ -145,14 +188,17 @@ async def compare_configs(
 
                 retrieved_results = fallback_results
                 retrieved_chunks = fallback_chunks
-                answer = summary or f"Answer generated from {len(retrieved_chunks)} retrieved chunks (LLM unavailable)"
-                if summary is None and pipeline.llm_client and getattr(pipeline.llm_client, "llm", None):
-                    timer.start("llm_time_ms")
-                    answer = f"Answer generated from {len(retrieved_chunks)} retrieved chunks (LLM unavailable)"
-                    timer.stop("llm_time_ms")
+                timer.start("llm_time_ms")
+                if summary is not None:
+                    answer = summary
+                elif pipeline.llm_client and getattr(pipeline.llm_client, "llm", None):
+                    try:
+                        answer = await pipeline.llm_client.generate_async(query, retrieved_chunks)
+                    except Exception as e:
+                        answer = f"LLM generation failed: {str(e)}"
                 else:
-                    timer.start("llm_time_ms")
-                    timer.stop("llm_time_ms")
+                    answer = f"Answer generated from {len(retrieved_chunks)} retrieved chunks (LLM unavailable)"
+                timer.stop("llm_time_ms")
                 raw_scores = [float(score) for _, score in retrieved_results] if retrieved_results else []
                 avg_similarity = calc_avg_similarity(raw_scores)
             else:
@@ -226,12 +272,27 @@ async def compare_configs(
                 chunk_scores = [float(getattr(chunk, "score", 0.0)) for chunk in retrieved_chunks]
             avg_similarity_for_db = (sum(chunk_scores) / len(chunk_scores)) if chunk_scores else 0.0
 
+            user_ts = datetime.now(timezone.utc)
+            assistant_ts = user_ts + timedelta(milliseconds=1)
+
+            user_msg = ChatMessage(
+                user_id=current_user.id,
+                document_id=document_id,
+                config_id=config.id,
+                role="user",
+                content=query,
+                timestamp=user_ts,
+                retrieved_chunks=None,
+            )
+            db.add(user_msg)
+
             assistant_msg = ChatMessage(
                 user_id=current_user.id,
                 document_id=document_id,
                 config_id=config.id,
                 role="assistant",
                 content=answer,
+                timestamp=assistant_ts,
                 retrieved_chunks=[
                     {
                         "id": str(getattr(chunk, "id", idx)),

@@ -60,24 +60,37 @@ def verify_password(raw_password: str, password_hash: str) -> bool:
     return bcrypt.checkpw(raw_password.encode("utf-8"), password_hash.encode("utf-8"))
 
 
-def create_session_token(user_id: uuid.UUID) -> str:
+def create_session_token(user_id: uuid.UUID, token_version: int = 0) -> str:
     serializer = _get_serializer()
-    return serializer.dumps({"user_id": str(user_id)})
+    return serializer.dumps({"user_id": str(user_id), "tv": int(token_version)})
 
 
-def decode_session_token(token: str) -> uuid.UUID:
+def decode_session_payload(token: str) -> tuple[uuid.UUID, int | None]:
     serializer = _get_serializer()
     payload = serializer.loads(token, max_age=SESSION_MAX_AGE_SECONDS)
     try:
-        return uuid.UUID(payload["user_id"])
+        user_id = uuid.UUID(payload["user_id"])
+        raw_tv = payload.get("tv")
+        token_version = int(raw_tv) if raw_tv is not None else None
+        return user_id, token_version
     except Exception as exc:
         raise BadSignature("Invalid token payload") from exc
 
 
+def decode_session_token(token: str) -> uuid.UUID:
+    user_id, _ = decode_session_payload(token)
+    return user_id
+
+
 def create_password_reset_token(user_id: uuid.UUID) -> str:
-    """Create a password reset token."""
+    """Create a unique password reset token."""
     serializer = _get_reset_serializer()
-    return serializer.dumps({"user_id": str(user_id)})
+    return serializer.dumps({"user_id": str(user_id), "jti": uuid.uuid4().hex})
+
+
+def hash_reset_token(token: str) -> str:
+    """Return a deterministic SHA-256 hex digest for storing reset tokens safely."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 def decode_password_reset_token(token: str) -> uuid.UUID:
@@ -137,19 +150,24 @@ def clear_auth_cookie(response: Response) -> None:
     )
 
 
-async def get_current_user(request: Request) -> User:
+def extract_session_token(request: Request) -> str | None:
     token: str | None = None
     auth_header = request.headers.get("Authorization")
     if auth_header and auth_header.lower().startswith("bearer "):
         token = auth_header[7:].strip()
     if not token:
         token = request.cookies.get(SESSION_COOKIE_NAME)
+    return token
+
+
+async def get_current_user(request: Request) -> User:
+    token = extract_session_token(request)
 
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
 
     try:
-        user_id = decode_session_token(token)
+        user_id, token_version = decode_session_payload(token)
     except Exception as exc:
         logger.warning("Invalid session token: %s", exc)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session token")
@@ -166,5 +184,13 @@ async def get_current_user(request: Request) -> User:
 
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+
+    current_version = int(getattr(user, "token_version", 0) or 0)
+    if token_version is None:
+        if current_version != 0:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session revoked")
+    elif token_version != current_version:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session revoked")
+
     return user
 

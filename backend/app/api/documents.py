@@ -100,7 +100,11 @@ async def upload_document(
 
 
 @router.get("/index-status/{job_id}")
-async def get_index_status(job_id: str, current_user: User = Depends(get_current_user)):
+async def get_index_status(
+    job_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """P2.1 — Poll the status of a background indexing job.
 
     Returns JSON with fields: job_id, status (pending|indexing|ready|failed),
@@ -109,6 +113,19 @@ async def get_index_status(job_id: str, current_user: User = Depends(get_current
     job = IndexingJobStore.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Indexing job not found")
+
+    if job.user_id is not None:
+        if job.user_id != str(current_user.id):
+            raise HTTPException(status_code=404, detail="Indexing job not found")
+    else:
+        try:
+            doc_uuid = uuid.UUID(str(job.doc_id))
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=404, detail="Indexing job not found")
+        owner_stmt = select(Document.id).where(Document.id == doc_uuid, Document.user_id == current_user.id)
+        if (await db.execute(owner_stmt)).scalars().first() is None:
+            raise HTTPException(status_code=404, detail="Indexing job not found")
+
     return job.to_dict()
 
 
@@ -278,7 +295,11 @@ async def index_document_tables(
         raise HTTPException(status_code=400, detail="Document is not a PDF")
 
     # Create indexing job
-    job_id = IndexingJobStore.create(doc_id=str(doc_id), config_id=str(uuid.uuid4()))
+    job_id = IndexingJobStore.create(
+        doc_id=str(doc_id),
+        config_id=str(uuid.uuid4()),
+        user_id=str(current_user.id),
+    )
 
     def _bg_index_tables(job_id_local: str, pdf_bytes: bytes, filename: str):
         try:
@@ -293,6 +314,10 @@ async def index_document_tables(
             IndexingJobStore.update(job_id_local, status="ready", progress_pct=100)
         except Exception as exc:
             IndexingJobStore.update(job_id_local, status="failed", error=str(exc))
+        finally:
+            job = IndexingJobStore.get(job_id_local)
+            if job and job.status in ("pending", "indexing"):
+                IndexingJobStore.update(job_id_local, status="failed", error="Table indexing terminated unexpectedly")
 
     # Snapshot bytes to avoid DB session usage in the background task
     pdf_bytes = doc.content if isinstance(doc.content, (bytes, bytearray)) else doc.content.encode("utf-8")
@@ -300,7 +325,12 @@ async def index_document_tables(
 
     await db.commit()
 
-    return {"status": "indexing", "job_id": job_id, "document_id": str(doc_id)}
+    created_job = IndexingJobStore.get(job_id)
+    return {
+        "status": created_job.status if created_job else "pending",
+        "job_id": job_id,
+        "document_id": str(doc_id),
+    }
 
 
 @router.get("/images/{storage_key}")

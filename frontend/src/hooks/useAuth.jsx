@@ -1,5 +1,5 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { getMe, login as apiLogin, logout as apiLogout, signup as apiSignup } from "../services/api";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { AUTH_EXPIRED_EVENT, getMe, login as apiLogin, logout as apiLogout, signup as apiSignup } from "../services/api";
 
 const AuthContext = createContext(null);
 
@@ -35,8 +35,14 @@ export function AuthProvider({ children }) {
       }
     })();
 
+    const handleAuthExpired = () => {
+      setUser(null);
+    };
+    window.addEventListener(AUTH_EXPIRED_EVENT, handleAuthExpired);
+
     return () => {
       mounted = false;
+      window.removeEventListener(AUTH_EXPIRED_EVENT, handleAuthExpired);
     };
   }, [refresh]);
 

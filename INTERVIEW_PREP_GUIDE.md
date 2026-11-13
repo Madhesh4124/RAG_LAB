@@ -83,7 +83,7 @@ In production, **Toy RAG fails catastrophically**:
 │  │ • Recursive Separators          │   │ • HuggingFace all-MiniLM-L6-v2  │  │ • Sparse Disk-Cached BM25   │  │
 │  │ • Semantic Centroid-Drift       │   │ • Local CLIP Image Embeddings   │  │ • Convex Fusion (α·D + (1-α)·S││
 │  │ • Sentence-Window (Context Exp) │   │ • Batched Sequential Scheduling │  │ • Maximal Marginal Relevance │ │
-│  │ • Chapter Heading Anchors       │   │ • ChromaDB Multi-Tenant Namesp. │  │ • BGE-Reranker-v2-m3        │  │
+│  │ • Chapter Heading Anchors       │   │ • ChromaDB Multi-Tenant Namesp. │  │ • Nemotron-3.5-Rerank-8B    │  │
 │  └─────────────────────────────────┘   └─────────────────────────────────┘  └─────────────────────────────┘  │
 │                                                                                                              │
 │  ┌───────────────────────────────────────────────────────────────────────┐  ┌─────────────────────────────┐ │
@@ -181,7 +181,7 @@ The system uses the **Abstract Factory Pattern** (`PipelineFactory`) to instanti
   "embedder":    {"provider": "nvidia", "model": "nvidia/nemotron-3-embed-1b"},
   "vectorstore": {"type": "chroma", "collection_name": "user_..._rag_cfg_..."},
   "retriever":   {"type": "hybrid", "alpha": 0.7, "top_k": 5, "similarity_threshold": 0.35},
-  "reranker":    {"enabled": True, "provider": "huggingface_api", "model": "BAAI/bge-reranker-v2-m3"},
+  "reranker":    {"enabled": True, "provider": "nvidia", "model": "nvidia/nemotron-3.5-rerank-8b"},
   "llm":         {"provider": "nvidia", "model": "nvidia/nemotron-3.5-lightning-30b-a3b"},
   "memory":      {"type": "buffer", "max_turns": 6}
 }
@@ -476,7 +476,7 @@ Where $\lambda$ (default `0.5`) controls the penalty for selecting chunks that a
 
 #### The Architecture of Two-Stage Retrieval
 1. **Stage 1 (Bi-Encoder / Hybrid Retrieval)**: Fast, candidate generation. Retrieves $k_{\text{candidate}} = \max(2 \cdot \text{top\_k}, 6)$ chunks from ChromaDB and BM25. Bi-encoders process the query and document independently, making them fast but unable to model deep token-level cross-interactions.
-2. **Stage 2 (Cross-Encoder Reranking)**: Precision reranking. Feeds the query and retrieved candidates together into a single transformer model (`BAAI/bge-reranker-v2-m3` via Hugging Face Inference API, or local `cross-encoder/ms-marco-MiniLM-L-6-v2`). The cross-attention mechanism attends across every query token and document token simultaneously, generating a high-precision relevance score. The top $k$ items are returned.
+2. **Stage 2 (Cross-Encoder Reranking)**: Precision reranking. Feeds the query and retrieved candidates together into a single cross-encoder model (`nvidia/nemotron-3.5-rerank-8b` via NVIDIA NIM, or local `cross-encoder/ms-marco-MiniLM-L-6-v2`). The cross-attention mechanism attends across every query token and document token simultaneously, generating a high-precision relevance score. The top $k$ items are returned.
 
 #### Production Optimization & Candidate Gating:
 If the candidate pool contains fewer than `min_candidates` (default 3), reranking is skipped to avoid unnecessary API network calls when candidate set quality is already unambiguous.
@@ -697,7 +697,7 @@ These real scenarios provide concrete examples to share when interviewers ask: *
        │      ├── Dense Search: ChromaDB vector cosine distance
        │      ├── Sparse Search: BM25 disk-cached inverted index
        │      └── Linear Convex Fusion: Score = 0.7·Dense + 0.3·Sparse
-       ├── 4. Cross-Encoder Reranking: BGE-Reranker-v2-m3 scores top candidates
+       ├── 4. Cross-Encoder Reranking: Nemotron-3.5-Rerank-8B scores top candidates
        ├── 5. Emit SSE Event: {"type": "metadata", "chunks": [...]} (Citations appear in UI)
        ├── 6. NVIDIA Nemotron-3.5 Generation (enable_thinking=False):
        │      └── Emit SSE Events: {"type": "token", "content": "The..."}
@@ -1049,7 +1049,7 @@ Use these questions and model answers to prepare for technical interviews.
 | `embedding_provider` | `nvidia` | NVIDIA AI Endpoints (`nvidia/nemotron-3-embed-1b`) |
 | `retrieval_type` | `hybrid` | Combines dense vector search and sparse BM25 |
 | `alpha` | `0.7` | 70% weight to dense semantic similarity, 30% weight to BM25 keyword matching |
-| `reranker_enabled` | `True` | BAAI `bge-reranker-v2-m3` cross-encoder reranking |
+| `reranker_enabled` | `True` | NVIDIA `nemotron-3.5-rerank-8b` cross-encoder reranking |
 | `top_k` | `4` | Final number of chunks delivered to generation context |
 | `rerank_fetch_k` | `6` to `8` | Candidate pool size retrieved prior to reranking |
 | `llm_provider` | `nvidia` | NVIDIA NIM (`nemotron-3.5-lightning-30b-a3b`) |

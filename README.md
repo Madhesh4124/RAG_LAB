@@ -23,6 +23,7 @@ Unlike toy RAG implementations, RAG Lab provides an end-to-end experimentation a
 * **Hybrid Search**: Linear convex fusion ($\alpha \cdot \text{dense} + (1-\alpha) \cdot \text{sparse}$) combining dense vector embeddings (ChromaDB) and disk-cached BM25 sparse keyword indices.
 * **Document Extraction**: Dual-engine PDF parsing (`pdfplumber` + `pypdf`) preserving tabular layouts as Markdown and extracting diagrams/figures for CLIP multimodal indexing.
 * **Model Orchestration**: Generation via **NVIDIA NIM** (`nemotron-3.5-lightning-30b-a3b`) with chain-of-thought suppression, cascading fallbacks (Gemini 2.5 Flash), and ultra-fast evaluation via **Groq** (`gpt-oss-120b`).
+* **Cross-Encoder Reranking**: High-precision semantic rescoring via **NVIDIA NIM** (`nvidia/nemotron-3.5-rerank-8b`) with normalized exponential logit scaling to ensure accurate similarity thresholding, plus local CPU cross-encoder options.
 * **Side-by-Side Comparison Lab**: Stage up to 4 arbitrary pipeline configurations simultaneously, running parallel retrieval benchmarks with sub-2s response latencies.
 * **On-Demand LLM-as-a-Judge**: Decoupled deep evaluation (Faithfulness, Answer Relevancy, Context Recall) executed lazily upon tab selection to eliminate backend worker timeouts.
 * **Production Security**: Multi-tenant database isolation, signed HttpOnly cookies + cross-origin Bearer token auth, database-backed rate limiting, and React 19 error boundaries.
@@ -51,9 +52,9 @@ RAG Lab features three core workspaces accessible from the **Mode Selection** da
 1. **⚡ Quick Chat (`/chat`)**: Rapid document Q&A. Upload single or multi-document sets, automatically initialize best-preset embeddings, and stream responses token-by-token with real-time SSE, interactive citation cards, and session history.
 2. **🛠️ Custom Pipeline Architect (`/setup`)**: 5-step wizard to configure and fine-tune every layer:
    - **Chunking**: Fixed-size, Recursive Character, Semantic, Regex, and Sentence-Window (with window expansion).
-   - **Embedding**: Google Gemini (`models/gemini-embedding-001`, 3072-dim), NVIDIA (`nvidia/nemotron-3-embed-1b`, 1024-dim), or Hugging Face (`all-MiniLM-L6-v2`, 384-dim with zero-cost local CPU fallback).
+   - **Embedding**: Google Gemini (`models/gemini-embedding-001`, 3072-dim), NVIDIA (`nvidia/nemotron-3-embed-1b`, 1024-dim), or Hugging Face (`all-MiniLM-L6-v2`, 384-dim with zero-cost local CPU execution).
    - **Vector Store & Hybrid Retrieval**: ChromaDB with cosine distance + Rank-BM25 sparse retriever with tunable $\alpha$ fusion weight.
-   - **Rerankers**: BAAI BGE-Reranker-v2-m3 via Hugging Face API or local cross-encoders.
+   - **Rerankers**: NVIDIA NIM (`nvidia/nemotron-3.5-rerank-8b`) cross-encoder via simple checkbox toggle, or local CPU cross-encoders (`cross-encoder/ms-marco-MiniLM-L-6-v2`).
    - **Generation**: NVIDIA Nemotron-3.5, Gemini 2.5 Flash, or Groq with customizable temperature and max turns.
 3. **⚖️ Comparison Lab (`/compare`)**: Stage up to 4 configurations simultaneously. Run identical queries to inspect answer differences, retrieval overlap, similarity distributions, and per-stage latency decompositions.
 4. **📊 Evaluation Drawer**: Slide-out evaluation panel computing instant heuristic metrics (Precision@K, Recall@K, Hit Rate, Average Similarity) and on-demand deep LLM-as-a-Judge metrics (Faithfulness, Answer Relevancy, Context Recall).
@@ -111,9 +112,15 @@ RAG Lab features three core workspaces accessible from the **Mode Selection** da
   - Full relational isolation via `user_id` foreign keys on all SQL entities (`Document`, `RAGConfig`, `ChatMessage`, `EvaluationReport`).
   - Cryptographically signed session tokens (`itsdangerous`) with `HttpOnly`, `SameSite`, and `Secure` cookie options, plus Bearer token support for cross-origin deployments.
   - Database-backed rate limiting across workers (15 LLM calls/hr, 50 embedding calls/hr, 100 retrieval calls/hr).
+* **Resilient State Machines & Circuit Breakers**:
+  - Thread-safe `IndexingJobStore` finite state machine (`pending -> indexing -> ready | failed`) with in-flight task deduplication, monotonic progress tracking, and cancellation recovery.
+  - Half-open circuit breaker on remote embedding endpoints (`HuggingFaceAPIEmbedder`) to gracefully fall back to local CPU execution without cascading thread lockups.
+  - Cryptographically hashed, single-use password reset tokens with mandatory cooldown windows.
+  - Dynamic session revocation synchronization via `token_version` invalidating stale tokens on logout or password change.
+  - Complete cache & Chroma collection lifecycle cleanup on `/api/chat/reset` and config status changes.
 * **React 19 Frontend Resilience**:
-  - Full Vite 8 + React 19 single-page architecture.
-  - Root `ErrorBoundary` component ensuring runtime render failures display graceful recovery actions instead of blank/black screens.
+  - Full Vite 8 + React 19 single-page architecture with unified `ErrorBoundary` recovery.
+  - Asynchronous race-condition protection: `AbortController`-backed polling cleanup on unmount, staged config synchronization, and double-submit guards.
 
 ---
 
@@ -124,7 +131,7 @@ RAG Lab features three core workspaces accessible from the **Mode Selection** da
 - **Database**: SQLite (WAL mode, single-worker safety) / PostgreSQL with SQLAlchemy & Alembic
 - **Vector Storage**: ChromaDB (`chromadb`)
 - **Sparse Retrieval**: Rank-BM25 with disk-persisted corpus caches
-- **LLM Integrations**: NVIDIA NIM (`ChatNVIDIA`), Groq API (`ChatGroq`), Google Gemini (`ChatGoogleGenerativeAI`)
+- **LLM & Reranker Integrations**: NVIDIA NIM (`ChatNVIDIA` generation, `nvidia/nemotron-3.5-rerank-8b` reranking), Groq API (`ChatGroq` eval), Google Gemini (`ChatGoogleGenerativeAI`), sentence-transformers / cross-encoders (local CPU)
 - **Document Extractors**: `pdfplumber`, `pypdf`, `Pillow`, `pdf2image`, `pytesseract`
 
 ### Frontend
@@ -173,11 +180,11 @@ FRONTEND_URL=http://localhost:5173
 COOKIE_SECURE=false
 COOKIE_SAMESITE=lax
 
-# LLM & Embedding Providers
-NVIDIA_API_KEY=your_nvidia_api_key
-GROQ_API_KEY=your_groq_api_key
-GEMINI_API_KEY=your_gemini_api_key
-HUGGINGFACE_API_KEY=your_huggingface_api_key
+# LLM, Embedding & Reranker Providers
+NVIDIA_API_KEY=your_nvidia_api_key          # Generation (Nemotron 3.5 30B), Embeddings, & Reranking (nemotron-3.5-rerank-8b)
+GROQ_API_KEY=your_groq_api_key              # Fast LLM-as-a-Judge Evaluation (gpt-oss-120b) & Generation fallback
+GEMINI_API_KEY=your_gemini_api_key          # Gemini embeddings (3072-dim) & fallback generation
+HUGGINGFACE_API_KEY=your_huggingface_api_key # Optional: for gated model downloads / CLIP embeddings
 ```
 
 Run the backend server:
@@ -237,17 +244,28 @@ docker compose up --build
 | :--- | :--- | :--- |
 | `POST` | `/api/auth/signup` | Register new user account |
 | `POST` | `/api/auth/login` | Authenticate user & issue signed session cookie / bearer token |
+| `POST` | `/api/auth/logout` | Revoke session and increment user token version |
 | `GET` | `/api/auth/me` | Fetch active user profile and role |
-| `POST` | `/api/documents/upload` | Upload `.pdf` or `.txt` document |
+| `POST` | `/api/auth/request-password-reset` | Send rate-limited password reset link via email |
+| `POST` | `/api/auth/confirm-password-reset` | Confirm password reset with single-use hashed token |
+| `POST` | `/api/documents/upload` | Upload `.pdf` or `.txt` document (deduplicated by hash) |
 | `GET` | `/api/documents/list` | List user's isolated documents |
 | `GET` | `/api/documents/index-status/{job_id}` | Poll background indexing job progress |
 | `POST` | `/api/config/best-preset/apply` | Automatically configure and apply best preset |
+| `GET` | `/api/config/list` | List active RAG configurations (with inactive filter) |
+| `PATCH` | `/api/config/{config_id}/status` | Activate or deactivate RAG configuration |
 | `POST` | `/api/chat/prepare` | Queue document background indexing for chat session |
-| `POST` | `/api/chat/stream` | Real-time SSE streaming answer generation |
+| `POST` | `/api/chat` | Generate answer using document context |
+| `POST` | `/api/chat/stream` | Real-time SSE streaming answer generation with usage tracking |
+| `POST` | `/api/chat/reset` | Clear chat history, summaries, Chroma vectors & BM25 caches |
 | `GET` | `/api/chat/history/{doc_id}` | Retrieve persisted document conversation history |
-| `POST` | `/compare/run` | Execute fast parallel multi-config comparison query |
+| `POST` | `/api/compare` | Execute multi-config comparison query with paired message logging |
+| `POST` | `/compare/run` | Benchmark multiple configurations in parallel |
 | `POST` | `/compare/evaluate` | Run lazy on-demand LLM-as-a-judge evaluation across configs |
 | `POST` | `/compare/clear-chromadb` | Reset comparison collections to free storage space |
+| `POST` | `/api/evaluation/faithfulness` | Calculate faithfulness score for a generated message |
+| `GET` | `/health` | Liveness health check |
+| `GET` | `/health/ready` | Readiness check (validates DB connectivity & migrations) |
 
 ---
 
